@@ -9,7 +9,6 @@ const GuildStore = findByProps("getGuild", "getGuilds");
 
 const cachedMembers = new Set<string>();
 let unpatch: () => void;
-let renderUnpatch: (() => void)[] = [];
 
 function isCached(id: string, guildId: string): boolean {
     return cachedMembers.has(`${id}-${guildId}`);
@@ -21,7 +20,10 @@ async function fetchUser(id: string, guildId: string): Promise<void> {
     const user = res?.body;
     if (user) {
         console.log(`[ValidUser] Successfully fetched user ${id}:`, user.username);
+        // Dispatch USER_UPDATE
         FluxDispatcher.dispatch({ type: "USER_UPDATE", user });
+        // Also dispatch to update the user cache store
+        FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCESS", user });
         cachedMembers.add(`${id}-${guildId}`);
     } else {
         console.warn(`[ValidUser] No user data returned for ${id}`);
@@ -40,7 +42,10 @@ async function fetchMember(id: string, guildId: string): Promise<void> {
     }
 
     console.log(`[ValidUser] Successfully fetched profile for ${id}:`, body.user?.username);
+    // Dispatch USER_UPDATE
     FluxDispatcher.dispatch({ type: "USER_UPDATE", user: body.user });
+    // Also dispatch profile fetch success to ensure store updates
+    FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCESS", user: body.user });
 
     if (body.guild_member) {
         FluxDispatcher.dispatch({
@@ -48,8 +53,8 @@ async function fetchMember(id: string, guildId: string): Promise<void> {
             guildId,
             guildMember: body.guild_member,
         });
-        cachedMembers.add(`${id}-${guildId}`);
     }
+    cachedMembers.add(`${id}-${guildId}`);
 }
 
 function findMutualGuild(id: string): string | null {
@@ -136,65 +141,6 @@ async function processMessage(message: any): Promise<void> {
     }
 }
 
-// Patch the mention rendering to show usernames instead of IDs
-function patchMentionRendering() {
-    try {
-        // Try to find the mention component
-        const MentionModule = findByProps("Mention", "MentionTypes");
-        if (!MentionModule?.Mention) {
-            console.warn("[ValidUser] Could not find Mention component");
-            return;
-        }
-
-        renderUnpatch.push(before("type", MentionModule.Mention, (args: any[]) => {
-            const props = args[0];
-            const userId = props?.userId;
-            
-            if (userId) {
-                const user = UserStore?.getUser(userId);
-                if (user?.username && !props.children?.includes("@unknown-user")) {
-                    // User data is available, ensure it displays correctly
-                    props.children = `@${user.username}`;
-                    console.log(`[ValidUser] Rendering mention for ${userId}:`, user.username);
-                }
-            }
-        }));
-    } catch (e) {
-        console.warn("[ValidUser] Failed to patch mention rendering:", e);
-    }
-}
-
-// Alternative: Patch the message content rendering to replace raw IDs
-function patchMessageContentRendering() {
-    try {
-        const MessageContentModule = findByProps("renderContent") || findByProps("parseMessage");
-        if (!MessageContentModule) {
-            console.warn("[ValidUser] Could not find message content module");
-            return;
-        }
-
-        // Look for render functions and patch them
-        for (const key in MessageContentModule) {
-            if (typeof MessageContentModule[key] === "function") {
-                renderUnpatch.push(before(key, MessageContentModule, function(args: any[]) {
-                    if (args[0]?.content) {
-                        args[0].content = args[0].content.replace(/<@!?(\d+)>/g, (match: string, userId: string) => {
-                            const user = UserStore?.getUser(userId);
-                            if (user?.username) {
-                                console.log(`[ValidUser] Replacing <@${userId}> with @${user.username}`);
-                                return `@${user.username}`;
-                            }
-                            return match;
-                        });
-                    }
-                }));
-            }
-        }
-    } catch (e) {
-        console.warn("[ValidUser] Failed to patch message content:", e);
-    }
-}
-
 export const onLoad = () => {
     console.log(`[ValidUser] Plugin loaded`);
     
@@ -213,16 +159,10 @@ export const onLoad = () => {
             }
         }
     });
-
-    // Patch rendering to replace @unknown-user with actual usernames
-    patchMentionRendering();
-    patchMessageContentRendering();
 };
 
 export const onUnload = () => {
     console.log(`[ValidUser] Plugin unloaded`);
     unpatch?.();
-    renderUnpatch.forEach(p => p?.());
-    renderUnpatch = [];
     cachedMembers.clear();
 };
