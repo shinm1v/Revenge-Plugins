@@ -3,58 +3,104 @@ import { FluxDispatcher } from "@vendetta/metro/common";
 import { before } from "@vendetta/patcher";
 
 const RestAPI = findByProps("getAPIBaseURL", "get", "post");
+const UserStore = findByProps("getUser", "getCurrentUser");
+const GuildMemberStore = findByProps("getMember", "getTrueMember");
 
-const fetched = new Set();
-let unpatch;
+const cachedMembers = new Set<string>();
+let unpatch: () => void;
 
-async function resolveAndPatch(message) {
-    const mentions = message.mentions ?? [];
-    const unknown = mentions.filter(u => !u.username);
-    if (!unknown.length) return;
+function isCached(id: string, guildId: string): boolean {
+    if (cachedMembers.has(`${id}-${guildId}`)) return true;
+    const user = UserStore?.getUser(id);
+    if (!user?.username) return false;
+    const member = GuildMemberStore?.getMember(guildId, id);
+    return !!member;
+}
 
-    for (const mention of unknown) {
-        const id = mention.id;
-        if (fetched.has(id)) continue;
-        fetched.add(id);
+async function fetchUser(id: string, guildId: string): Promise<void> {
+    const res = await RestAPI.get({ url: `/users/${id}` });
+    const user = res?.body;
+    if (user) {
+        FluxDispatcher.dispatch({ type: "USER_UPDATE", user });
+        cachedMembers.add(`${id}-${guildId}`);
+    }
+}
 
-        try {
-            const res = await RestAPI.get({
-                url: `/users/${id}/profile?with_mutual_guilds=false&with_mutual_friends=false&with_mutual_friends_count=false${message.guild_id ? `&guild_id=${message.guild_id}` : ""}`
-            });
+async function fetchMember(id: string, guildId: string): Promise<void> {
+    const res = await RestAPI.get({
+        url: `/users/${id}/profile?with_mutual_friends_count=false&with_mutual_guilds=false&guild_id=${guildId}`
+    });
+    const body = res?.body;
+    if (!body) return;
 
-            const user = res?.body?.user;
-            if (!user) continue;
+    FluxDispatcher.dispatch({ type: "USER_UPDATE", user: body.user });
 
-            mention.username = user.username;
-            mention.discriminator = user.discriminator;
-            mention.avatar = user.avatar;
-            mention.global_name = user.global_name ?? user.username;
-        } catch (e) {
-            console.error(`[ValidUser] fetch failed for ${id}:`, e);
+    if (body.guild_member) {
+        FluxDispatcher.dispatch({
+            type: "GUILD_MEMBER_PROFILE_UPDATE",
+            guildId,
+            guildMember: body.guild_member,
+        });
+        cachedMembers.add(`${id}-${guildId}`);
+    }
+}
+
+async function fetchProfile(id: string, guildId: string, retry = false): Promise<boolean> {
+    if (isCached(id, guildId)) return false;
+
+    try {
+        if (retry) {
+            await fetchUser(id, guildId);
+        } else {
+            await fetchMember(id, guildId);
+        }
+        return false;
+    } catch (e: any) {
+        if (e?.status === 429) {
+            console.error(`[ValidUser] Rate limited on ${id}, aborting batch`);
+            return true; // abort
+        } else if ((e?.status === 403 || e?.status === 404) && !retry) {
+            return fetchProfile(id, guildId, true);
+        } else {
+            cachedMembers.add(`${id}-${guildId}`);
+            return false;
         }
     }
+}
 
-    FluxDispatcher.dispatch({
-        type: "MESSAGE_UPDATE",
-        message: { ...message, mentions },
-        channelId: message.channel_id,
-        otherPluginBypass: true,
-    });
+function getIdsFromContent(content: string): string[] {
+    return [...(content ?? "").matchAll(/<@!?(\d+)>/g)]
+        .map(m => m[1])
+        .filter((id, i, arr) => arr.indexOf(id) === i);
+}
+
+async function processMessage(message: any): Promise<void> {
+    const guildId = message.guild_id;
+    if (!guildId) return; // skip DMs
+
+    const fromContent = getIdsFromContent(message.content ?? "");
+    const fromMentions = (message.mentions ?? []).map((u: any) => u.id);
+    const allIds = [...new Set([...fromContent, ...fromMentions])];
+
+    for (const id of allIds) {
+        if (isCached(id, guildId)) continue;
+        const abort = await fetchProfile(id, guildId);
+        if (abort) break;
+    }
 }
 
 export const onLoad = () => {
-    unpatch = before("dispatch", FluxDispatcher, args => {
+    unpatch = before("dispatch", FluxDispatcher, (args: any[]) => {
         const ev = args[0];
         if (!ev?.type) return;
 
         if (ev.type === "MESSAGE_CREATE") {
-            const msg = ev.message;
-            if (msg) resolveAndPatch(msg);
+            processMessage(ev.message);
         }
 
         if (ev.type === "LOAD_MESSAGES_SUCCESS") {
             for (const msg of ev.messages ?? []) {
-                resolveAndPatch(msg);
+                processMessage(msg);
             }
         }
     });
@@ -62,5 +108,5 @@ export const onLoad = () => {
 
 export const onUnload = () => {
     unpatch?.();
-    fetched.clear();
+    cachedMembers.clear();
 };
