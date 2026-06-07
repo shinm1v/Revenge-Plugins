@@ -6,14 +6,34 @@ const RestAPI = findByProps("getAPIBaseURL", "get", "post");
 const UserStore = findByProps("getUser", "getCurrentUser");
 const GuildMemberStore = findByProps("getMember", "getTrueMember");
 const GuildStore = findByProps("getGuild", "getGuilds");
-const NavigationModule = findByProps("openUserProfile");
 
 const cachedMembers = new Set<string>();
 let unpatch: () => void;
-let renderUnpatch: (() => void)[] = [];
 
 function isCached(id: string, guildId: string): boolean {
     return cachedMembers.has(`${id}-${guildId}`);
+}
+
+async function fetchApplicationIdentities(id: string): Promise<void> {
+    try {
+        console.log(`[ValidUser] Fetching application identities for ${id}`);
+        await RestAPI.get({ url: `/users/${id}/application-identities?with_profiles=true` });
+    } catch (e: any) {
+        if (e?.status !== 404) {
+            console.warn(`[ValidUser] Failed to fetch app identities for ${id}:`, e?.status);
+        }
+    }
+}
+
+async function fetchUserNotes(id: string): Promise<void> {
+    try {
+        console.log(`[ValidUser] Fetching user notes for ${id}`);
+        await RestAPI.get({ url: `/users/@me/notes/${id}` });
+    } catch (e: any) {
+        if (e?.status !== 404) {
+            console.warn(`[ValidUser] Failed to fetch notes for ${id}:`, e?.status);
+        }
+    }
 }
 
 async function fetchUser(id: string, guildId: string): Promise<void> {
@@ -23,8 +43,8 @@ async function fetchUser(id: string, guildId: string): Promise<void> {
     if (user) {
         console.log(`[ValidUser] Successfully fetched user ${id}:`, user.username);
         FluxDispatcher.dispatch({ type: "USER_UPDATE", user });
-        FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCESS", user });
         cachedMembers.add(`${id}-${guildId}`);
+        FluxDispatcher.dispatch({ type: "MESSAGE_UPDATE" });
     } else {
         console.warn(`[ValidUser] No user data returned for ${id}`);
     }
@@ -32,8 +52,9 @@ async function fetchUser(id: string, guildId: string): Promise<void> {
 
 async function fetchMember(id: string, guildId: string): Promise<void> {
     console.log(`[ValidUser] Fetching member ${id} from guild ${guildId}`);
+    
     const res = await RestAPI.get({
-        url: `/users/${id}/profile?with_mutual_friends_count=false&with_mutual_guilds=false&guild_id=${guildId}`
+        url: `/users/${id}/profile?type=action_sheet&with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=false&guild_id=${guildId}`
     });
     const body = res?.body;
     if (!body) {
@@ -42,8 +63,8 @@ async function fetchMember(id: string, guildId: string): Promise<void> {
     }
 
     console.log(`[ValidUser] Successfully fetched profile for ${id}:`, body.user?.username);
+    
     FluxDispatcher.dispatch({ type: "USER_UPDATE", user: body.user });
-    FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCESS", user: body.user });
 
     if (body.guild_member) {
         FluxDispatcher.dispatch({
@@ -52,7 +73,30 @@ async function fetchMember(id: string, guildId: string): Promise<void> {
             guildMember: body.guild_member,
         });
     }
+
+    if (body.mutual_guilds) {
+        FluxDispatcher.dispatch({
+            type: "MUTUAL_GUILDS_FETCH_SUCCESS",
+            mutual_guilds: body.mutual_guilds,
+        });
+    }
+
+    if (body.mutual_friends) {
+        FluxDispatcher.dispatch({
+            type: "MUTUAL_FRIENDS_FETCH_SUCCESS",
+            mutual_friends: body.mutual_friends,
+        });
+    }
+
     cachedMembers.add(`${id}-${guildId}`);
+
+    await Promise.all([
+        fetchApplicationIdentities(id),
+        fetchUserNotes(id)
+    ]);
+
+    console.log(`[ValidUser] Forcing re-render for ${id}`);
+    FluxDispatcher.dispatch({ type: "MESSAGE_UPDATE" });
 }
 
 function findMutualGuild(id: string): string | null {
@@ -111,55 +155,56 @@ async function fetchProfile(id: string, guildId: string, retry = false): Promise
     }
 }
 
-// Patch mention component to fetch on click instead of automatically
-function patchMentionClick() {
-    try {
-        const MentionModule = findByProps("Mention", "MentionTypes");
-        if (!MentionModule?.Mention) {
-            console.warn("[ValidUser] Could not find Mention component");
-            return;
-        }
+function getIdsFromContent(content: string): string[] {
+    const matches = [...(content ?? "").matchAll(/<@!?(\d+)>/g)];
+    const ids = matches.map(m => m[1]).filter((id, i, arr) => arr.indexOf(id) === i);
+    if (ids.length > 0) {
+        console.log(`[ValidUser] Found mention IDs in content:`, ids);
+    }
+    return ids;
+}
 
-        renderUnpatch.push(before("type", MentionModule.Mention, (args: any[]) => {
-            const props = args[0];
-            const userId = props?.userId;
-            const guildId = props?.guildId;
-            
-            if (userId && guildId) {
-                // Override onClick to fetch user before opening profile
-                const originalOnClick = props?.onClick;
-                props.onClick = async (e: any) => {
-                    e?.stopPropagation?.();
-                    
-                    const user = UserStore?.getUser(userId);
-                    if (!user?.username) {
-                        console.log(`[ValidUser] Mention clicked for ${userId}, fetching data...`);
-                        await fetchProfile(userId, guildId);
-                    }
-                    
-                    // Open user profile
-                    if (NavigationModule?.openUserProfile) {
-                        NavigationModule.openUserProfile({ userId, guildId });
-                    }
-                };
-            }
-        }));
-    } catch (e) {
-        console.warn("[ValidUser] Failed to patch mention click:", e);
+async function processMessage(message: any): Promise<void> {
+    const guildId = message.guild_id;
+    if (!guildId) return;
+
+    const fromContent = getIdsFromContent(message.content ?? "");
+    const fromMentions = (message.mentions ?? []).map((u: any) => u.id);
+    const allIds = [...new Set([...fromContent, ...fromMentions])];
+
+    if (allIds.length === 0) return;
+
+    console.log(`[ValidUser] Processing message with user IDs:`, allIds);
+
+    for (const id of allIds) {
+        if (isCached(id, guildId)) continue;
+        const abort = await fetchProfile(id, guildId);
+        if (abort) break;
     }
 }
 
 export const onLoad = () => {
-    console.log(`[ValidUser] Plugin loaded - fetch on click only`);
+    console.log(`[ValidUser] Plugin loaded - auto-fetching all mentions`);
     
-    // Patch mention components to fetch on click
-    patchMentionClick();
+    unpatch = before("dispatch", FluxDispatcher, (args: any[]) => {
+        const ev = args[0];
+        if (!ev?.type) return;
+
+        if (ev.type === "MESSAGE_CREATE") {
+            processMessage(ev.message);
+        }
+
+        if (ev.type === "LOAD_MESSAGES_SUCCESS") {
+            console.log(`[ValidUser] Loading ${ev.messages?.length || 0} messages`);
+            for (const msg of ev.messages ?? []) {
+                processMessage(msg);
+            }
+        }
+    });
 };
 
 export const onUnload = () => {
     console.log(`[ValidUser] Plugin unloaded`);
     unpatch?.();
-    renderUnpatch.forEach(p => p?.());
-    renderUnpatch = [];
     cachedMembers.clear();
 };
