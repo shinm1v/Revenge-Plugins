@@ -6,9 +6,11 @@ const RestAPI = findByProps("getAPIBaseURL", "get", "post");
 const UserStore = findByProps("getUser", "getCurrentUser");
 const GuildMemberStore = findByProps("getMember", "getTrueMember");
 const GuildStore = findByProps("getGuild", "getGuilds");
+const NavigationModule = findByProps("openUserProfile");
 
 const cachedMembers = new Set<string>();
 let unpatch: () => void;
+let renderUnpatch: (() => void)[] = [];
 
 function isCached(id: string, guildId: string): boolean {
     return cachedMembers.has(`${id}-${guildId}`);
@@ -20,9 +22,7 @@ async function fetchUser(id: string, guildId: string): Promise<void> {
     const user = res?.body;
     if (user) {
         console.log(`[ValidUser] Successfully fetched user ${id}:`, user.username);
-        // Dispatch USER_UPDATE
         FluxDispatcher.dispatch({ type: "USER_UPDATE", user });
-        // Also dispatch to update the user cache store
         FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCESS", user });
         cachedMembers.add(`${id}-${guildId}`);
     } else {
@@ -42,9 +42,7 @@ async function fetchMember(id: string, guildId: string): Promise<void> {
     }
 
     console.log(`[ValidUser] Successfully fetched profile for ${id}:`, body.user?.username);
-    // Dispatch USER_UPDATE
     FluxDispatcher.dispatch({ type: "USER_UPDATE", user: body.user });
-    // Also dispatch profile fetch success to ensure store updates
     FluxDispatcher.dispatch({ type: "USER_PROFILE_FETCH_SUCCESS", user: body.user });
 
     if (body.guild_member) {
@@ -113,56 +111,55 @@ async function fetchProfile(id: string, guildId: string, retry = false): Promise
     }
 }
 
-function getIdsFromContent(content: string): string[] {
-    const matches = [...(content ?? "").matchAll(/<@!?(\d+)>/g)];
-    const ids = matches.map(m => m[1]).filter((id, i, arr) => arr.indexOf(id) === i);
-    if (ids.length > 0) {
-        console.log(`[ValidUser] Found mention IDs in content:`, ids);
-    }
-    return ids;
-}
+// Patch mention component to fetch on click instead of automatically
+function patchMentionClick() {
+    try {
+        const MentionModule = findByProps("Mention", "MentionTypes");
+        if (!MentionModule?.Mention) {
+            console.warn("[ValidUser] Could not find Mention component");
+            return;
+        }
 
-async function processMessage(message: any): Promise<void> {
-    const guildId = message.guild_id;
-    if (!guildId) return;
-
-    const fromContent = getIdsFromContent(message.content ?? "");
-    const fromMentions = (message.mentions ?? []).map((u: any) => u.id);
-    const allIds = [...new Set([...fromContent, ...fromMentions])];
-
-    if (allIds.length === 0) return;
-
-    console.log(`[ValidUser] Processing message with user IDs:`, allIds);
-
-    for (const id of allIds) {
-        if (isCached(id, guildId)) continue;
-        const abort = await fetchProfile(id, guildId);
-        if (abort) break;
+        renderUnpatch.push(before("type", MentionModule.Mention, (args: any[]) => {
+            const props = args[0];
+            const userId = props?.userId;
+            const guildId = props?.guildId;
+            
+            if (userId && guildId) {
+                // Override onClick to fetch user before opening profile
+                const originalOnClick = props?.onClick;
+                props.onClick = async (e: any) => {
+                    e?.stopPropagation?.();
+                    
+                    const user = UserStore?.getUser(userId);
+                    if (!user?.username) {
+                        console.log(`[ValidUser] Mention clicked for ${userId}, fetching data...`);
+                        await fetchProfile(userId, guildId);
+                    }
+                    
+                    // Open user profile
+                    if (NavigationModule?.openUserProfile) {
+                        NavigationModule.openUserProfile({ userId, guildId });
+                    }
+                };
+            }
+        }));
+    } catch (e) {
+        console.warn("[ValidUser] Failed to patch mention click:", e);
     }
 }
 
 export const onLoad = () => {
-    console.log(`[ValidUser] Plugin loaded`);
+    console.log(`[ValidUser] Plugin loaded - fetch on click only`);
     
-    unpatch = before("dispatch", FluxDispatcher, (args: any[]) => {
-        const ev = args[0];
-        if (!ev?.type) return;
-
-        if (ev.type === "MESSAGE_CREATE") {
-            processMessage(ev.message);
-        }
-
-        if (ev.type === "LOAD_MESSAGES_SUCCESS") {
-            console.log(`[ValidUser] Loading ${ev.messages?.length || 0} messages`);
-            for (const msg of ev.messages ?? []) {
-                processMessage(msg);
-            }
-        }
-    });
+    // Patch mention components to fetch on click
+    patchMentionClick();
 };
 
 export const onUnload = () => {
     console.log(`[ValidUser] Plugin unloaded`);
     unpatch?.();
+    renderUnpatch.forEach(p => p?.());
+    renderUnpatch = [];
     cachedMembers.clear();
 };
