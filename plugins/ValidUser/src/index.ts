@@ -10,11 +10,7 @@ const cachedMembers = new Set<string>();
 let unpatch: () => void;
 
 function isCached(id: string, guildId: string): boolean {
-    if (cachedMembers.has(`${id}-${guildId}`)) return true;
-    const user = UserStore?.getUser(id);
-    if (!user?.username) return false;
-    const member = GuildMemberStore?.getMember(guildId, id);
-    return !!member;
+    return cachedMembers.has(`${id}-${guildId}`);
 }
 
 async function fetchUser(id: string, guildId: string): Promise<void> {
