@@ -9,6 +9,7 @@ const GuildStore = findByProps("getGuild", "getGuilds");
 
 const cachedMembers = new Set<string>();
 let unpatch: () => void;
+let renderUnpatch: (() => void)[] = [];
 
 function isCached(id: string, guildId: string): boolean {
     return cachedMembers.has(`${id}-${guildId}`);
@@ -52,7 +53,6 @@ async function fetchMember(id: string, guildId: string): Promise<void> {
 }
 
 function findMutualGuild(id: string): string | null {
-    // Try to find a mutual guild where the user exists
     const guilds = GuildStore?.getGuilds?.();
     if (!guilds) return null;
 
@@ -85,22 +85,20 @@ async function fetchProfile(id: string, guildId: string, retry = false): Promise
         
         if (e?.status === 429) {
             console.error(`[ValidUser] Rate limited on ${id}, aborting batch`);
-            return true; // abort
+            return true;
         } else if ((e?.status === 403 || e?.status === 404) && !retry) {
             console.log(`[ValidUser] Got ${e?.status} for ${id}, trying mutual guild lookup...`);
-            // If we get 403/404, try with a mutual guild first
             const mutualGuild = findMutualGuild(id);
             if (mutualGuild && mutualGuild !== guildId) {
                 try {
                     await fetchMember(id, mutualGuild);
-                    cachedMembers.add(`${id}-${guildId}`); // Mark as cached for original guild too
+                    cachedMembers.add(`${id}-${guildId}`);
                     return false;
                 } catch (e2: any) {
                     console.error(`[ValidUser] Mutual guild fetch also failed:`, e2?.status);
                     if (e2?.status === 429) return true;
                 }
             }
-            // Final fallback to fetchUser
             return fetchProfile(id, guildId, true);
         } else {
             console.log(`[ValidUser] Marking ${id} as cached after error`);
@@ -121,7 +119,7 @@ function getIdsFromContent(content: string): string[] {
 
 async function processMessage(message: any): Promise<void> {
     const guildId = message.guild_id;
-    if (!guildId) return; // skip DMs
+    if (!guildId) return;
 
     const fromContent = getIdsFromContent(message.content ?? "");
     const fromMentions = (message.mentions ?? []).map((u: any) => u.id);
@@ -138,24 +136,63 @@ async function processMessage(message: any): Promise<void> {
     }
 }
 
-// Patch message rendering to replace @unknown-user with actual mentions when available
-function patchMessageContent() {
-    const MessageComponent = findByProps("default")?.default;
-    if (!MessageComponent) return;
+// Patch the mention rendering to show usernames instead of IDs
+function patchMentionRendering() {
+    try {
+        // Try to find the mention component
+        const MentionModule = findByProps("Mention", "MentionTypes");
+        if (!MentionModule?.Mention) {
+            console.warn("[ValidUser] Could not find Mention component");
+            return;
+        }
 
-    before("default", MessageComponent, (args: any[]) => {
-        const message = args[0]?.message;
-        if (!message?.content) return;
-
-        // Try to resolve @unknown-user mentions
-        message.content = message.content.replace(/<@!?(\d+)>/g, (match: string, userId: string) => {
-            const user = UserStore?.getUser(userId);
-            if (user?.username) {
-                return `@${user.username}`;
+        renderUnpatch.push(before("type", MentionModule.Mention, (args: any[]) => {
+            const props = args[0];
+            const userId = props?.userId;
+            
+            if (userId) {
+                const user = UserStore?.getUser(userId);
+                if (user?.username && !props.children?.includes("@unknown-user")) {
+                    // User data is available, ensure it displays correctly
+                    props.children = `@${user.username}`;
+                    console.log(`[ValidUser] Rendering mention for ${userId}:`, user.username);
+                }
             }
-            return match;
-        });
-    });
+        }));
+    } catch (e) {
+        console.warn("[ValidUser] Failed to patch mention rendering:", e);
+    }
+}
+
+// Alternative: Patch the message content rendering to replace raw IDs
+function patchMessageContentRendering() {
+    try {
+        const MessageContentModule = findByProps("renderContent") || findByProps("parseMessage");
+        if (!MessageContentModule) {
+            console.warn("[ValidUser] Could not find message content module");
+            return;
+        }
+
+        // Look for render functions and patch them
+        for (const key in MessageContentModule) {
+            if (typeof MessageContentModule[key] === "function") {
+                renderUnpatch.push(before(key, MessageContentModule, function(args: any[]) {
+                    if (args[0]?.content) {
+                        args[0].content = args[0].content.replace(/<@!?(\d+)>/g, (match: string, userId: string) => {
+                            const user = UserStore?.getUser(userId);
+                            if (user?.username) {
+                                console.log(`[ValidUser] Replacing <@${userId}> with @${user.username}`);
+                                return `@${user.username}`;
+                            }
+                            return match;
+                        });
+                    }
+                }));
+            }
+        }
+    } catch (e) {
+        console.warn("[ValidUser] Failed to patch message content:", e);
+    }
 }
 
 export const onLoad = () => {
@@ -177,12 +214,15 @@ export const onLoad = () => {
         }
     });
 
-    // Optional: Patch message rendering (comment out if causes issues)
-    // patchMessageContent();
+    // Patch rendering to replace @unknown-user with actual usernames
+    patchMentionRendering();
+    patchMessageContentRendering();
 };
 
 export const onUnload = () => {
     console.log(`[ValidUser] Plugin unloaded`);
     unpatch?.();
+    renderUnpatch.forEach(p => p?.());
+    renderUnpatch = [];
     cachedMembers.clear();
 };
