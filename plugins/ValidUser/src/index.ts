@@ -5,6 +5,7 @@ import { before } from "@vendetta/patcher";
 const RestAPI = findByProps("getAPIBaseURL", "get", "post");
 const UserStore = findByProps("getUser", "getCurrentUser");
 const GuildMemberStore = findByProps("getMember", "getTrueMember");
+const GuildStore = findByProps("getGuild", "getGuilds");
 
 const cachedMembers = new Set<string>();
 let unpatch: () => void;
@@ -41,6 +42,18 @@ async function fetchMember(id: string, guildId: string): Promise<void> {
     }
 }
 
+function findMutualGuild(id: string): string | null {
+    // Try to find a mutual guild where the user exists
+    const guilds = GuildStore?.getGuilds?.();
+    if (!guilds) return null;
+
+    for (const guildId of Object.keys(guilds)) {
+        const member = GuildMemberStore?.getMember(guildId, id);
+        if (member) return guildId;
+    }
+    return null;
+}
+
 async function fetchProfile(id: string, guildId: string, retry = false): Promise<boolean> {
     if (isCached(id, guildId)) return false;
 
@@ -56,6 +69,18 @@ async function fetchProfile(id: string, guildId: string, retry = false): Promise
             console.error(`[ValidUser] Rate limited on ${id}, aborting batch`);
             return true; // abort
         } else if ((e?.status === 403 || e?.status === 404) && !retry) {
+            // If we get 403/404, try with a mutual guild first
+            const mutualGuild = findMutualGuild(id);
+            if (mutualGuild && mutualGuild !== guildId) {
+                try {
+                    await fetchMember(id, mutualGuild);
+                    cachedMembers.add(`${id}-${guildId}`); // Mark as cached for original guild too
+                    return false;
+                } catch (e2: any) {
+                    if (e2?.status === 429) return true;
+                }
+            }
+            // Final fallback to fetchUser
             return fetchProfile(id, guildId, true);
         } else {
             cachedMembers.add(`${id}-${guildId}`);
