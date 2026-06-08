@@ -1,78 +1,66 @@
 import { findByProps } from "@vendetta/metro";
-import { FluxDispatcher } from "@vendetta/metro/common";
-import { before } from "@vendetta/patcher";
+import { patcher } from "@vendetta";
 
-const RestAPI = findByProps("getAPIBaseURL", "get", "post");
+// Acquire essential metro modules
+const API = findByProps("get", "post");
+const Dispatcher = findByProps("dispatch", "subscribe");
 const UserStore = findByProps("getUser", "getCurrentUser");
 
-let unpatch: () => void;
+// Tracking set to ensure we don't spam requests for the same ID 
+const fetchingCache = new Set();
+let patches = [];
 
-async function fetchUser(id: string): Promise<void> {
+/**
+ * Force fetches a user profile via API and populates the local Discord UserStore.
+ */
+async function fetchAndCacheUser(id) {
+    if (!id || UserStore.getUser(id) || fetchingCache.has(id)) return;
+
+    fetchingCache.add(id);
     try {
-        const res = await RestAPI.get({ url: `/users/${id}` });
-        const user = res?.body;
-        if (user) {
-            // Inject directly into UserStore
-            FluxDispatcher.dispatch({ type: "USER_UPDATE", user });
-        }
-    } catch (e: any) {
-        console.warn(`[ValidUser] Failed to fetch user ${id}:`, e?.status);
+        const res = await API.get({ url: `/users/${id}` });
+        
+        Dispatcher.dispatch({
+            type: "USER_UPDATE",
+            user: res.body
+        });
+    } catch (err) {
+        console.error(`[UserFetch] Failed to resolve user ${id}:`, err);
+    } finally {
+        fetchingCache.delete(id);
     }
 }
 
-function getUnknownMentionIds(content: string): string[] {
-    // Extract IDs from mentions in the content
-    return [...(content ?? "").matchAll(/<@!?(\d+)>/g)]
-        .map(m => m[1])
-        .filter((id, i, arr) => arr.indexOf(id) === i)
-        .filter(id => {
-            // Only return IDs that are NOT in UserStore yet
-            const user = UserStore?.getUser(id);
-            return !user?.username;
-        });
-}
+export default {
+    onLoad: () => {
+        // Find the internal component responsible for rendering user mentions
+        // Depending on Discord's bundle build, this is often found via filter or specific props
+        const MentionModule = findByProps("UserMention", "default") || findByProps("Mention");
 
-async function processMessage(message: any): Promise<void> {
-    const guildId = message.guild_id;
-    if (!guildId) return;
+        if (!MentionModule) return;
 
-    // Find unknown mentions in this message
-    const unknownIds = getUnknownMentionIds(message.content ?? "");
-    if (unknownIds.length === 0) return;
+        // Patch the Mention renderer component
+        const patch = patcher.before("default", MentionModule, (args) => {
+            const props = args[0];
+            if (!props || !props.userId) return;
 
-    // Fetch all unknown users
-    await Promise.all(unknownIds.map(id => fetchUser(id)));
-
-    // Re-render the message to show resolved mentions
-    const channelId = message.channel_id;
-    const messageId = message.id;
-    
-    FluxDispatcher.dispatch({
-        type: "MESSAGE_UPDATE",
-        message: { ...message },
-    });
-}
-
-export const onLoad = () => {
-    console.log(`[ValidUser] Plugin loaded`);
-    
-    unpatch = before("dispatch", FluxDispatcher, (args: any[]) => {
-        const ev = args[0];
-        if (!ev?.type) return;
-
-        if (ev.type === "MESSAGE_CREATE") {
-            processMessage(ev.message);
-        }
-
-        if (ev.type === "LOAD_MESSAGES_SUCCESS") {
-            for (const msg of ev.messages ?? []) {
-                processMessage(msg);
+            const cachedUser = UserStore.getUser(props.userId);
+            
+            // If the user isn't locally cached, fetch them asynchronously 
+            if (!cachedUser) {
+                fetchAndCacheUser(props.userId);
             }
-        }
-    });
-};
+        });
 
-export const onUnload = () => {
-    console.log(`[ValidUser] Plugin unloaded`);
-    unpatch?.();
+        patches.push(patch);
+    },
+
+    onUnload: () => {
+        // Clean up patches to prevent memory leaks and avoid crashing the client on reload
+        for (const unpatch of patches) {
+            if (typeof unpatch === "function") unpatch();
+        }
+        patches = [];
+        fetchingCache.clear();
+    }
 };
