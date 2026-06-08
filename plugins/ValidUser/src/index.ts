@@ -1,82 +1,59 @@
 import { findByProps } from "@vendetta/metro";
-import { patcher } from "@vendetta";
+import { FluxDispatcher } from "@vendetta/metro/common";
+import { before } from "@vendetta/patcher";
 
-// Acquire core React Native / Webpack modules
-const API = findByProps("get", "post");
-const Dispatcher = findByProps("dispatch", "subscribe");
-const UserStore = findByProps("getUser", "getCurrentUser");
+const RestAPI = findByProps("get", "post");
 
-// Filter for internal layout modules
-// Discord's React Native engine usually packages this inside a "PureComponent" or "NameTag" / "Mention" hook.
-const PureRenderModules = findByProps("UserMention", "default") || findByProps("Mention") || findByProps("NameTag");
+const fetched = new Set<string>();
+let unpatch: () => void;
 
-// Tracking cache to prevent aggressive rate-limiting (429) from Discord
-const executionQueue = new Set();
-let activePatches = [];
+async function resolveUser(id: string): Promise<void> {
+    if (fetched.has(id)) return;
+    fetched.add(id);
 
-/**
- * Asynchronously pulls the missing user from Discord's servers 
- * and updates the Dispatcher cache to force components to rerender.
- */
-async function triggerUserResolution(userId) {
-    if (!userId || UserStore.getUser(userId) || executionQueue.has(userId)) return;
-
-    executionQueue.add(userId);
     try {
-        // GET Request to pull the raw user payload
-        const response = await API.get({ url: `/users/${userId}` });
-        
-        if (response && response.body) {
-            // Dispatches to the internal storage layer
-            Dispatcher.dispatch({
-                type: "USER_UPDATE",
-                user: response.body
-            });
+        const res = await RestAPI.get({ url: `/users/${id}` });
+        if (res?.body) {
+            FluxDispatcher.dispatch({ type: "USER_UPDATE", user: res.body });
         }
-    } catch (error) {
-        console.error(`[RevengeUnknownFix] Failed resolving ID ${userId}:`, error);
-    } finally {
-        // Clear queue tracking regardless of outcome
-        executionQueue.delete(userId);
+    } catch (e: any) {
+        if (e?.status === 429) {
+            console.error(`[ValidUser] Rate limited, aborting`);
+            fetched.delete(id); // allow retry later
+        }
     }
 }
 
-export default {
-    onLoad: () => {
-        if (!PureRenderModules) {
-            console.error("[RevengeUnknownFix] Target render modules could not be located in Webpack bundle.");
-            return;
-        }
+function getIds(message: any): string[] {
+    const fromMentions = (message.mentions ?? []).map((u: any) => u.id);
+    const fromContent = [...(message.content ?? "").matchAll(/<@!?(\d+)>/g)].map((m: any) => m[1]);
+    return [...new Set([...fromMentions, ...fromContent])];
+}
 
-        // We target the default hook layout or structural sub-components
-        const targetHook = PureRenderModules.default ? "default" : Object.keys(PureRenderModules)[0];
-
-        const mentionPatch = patcher.before(targetHook, PureRenderModules, (args) => {
-            const renderProps = args[0];
-            if (!renderProps) return;
-
-            // Extract the user ID from common mention/nametag structural elements
-            const extractedId = renderProps.userId || renderProps.id || (renderProps.message && renderProps.message.authorId);
-
-            if (extractedId) {
-                const localUser = UserStore.getUser(extractedId);
-                
-                // If local cache returns null/undefined, it means they are currently an "unknown-user"
-                if (!localUser) {
-                    triggerUserResolution(extractedId);
-                }
-            }
-        });
-
-        activePatches.push(mentionPatch);
-    },
-
-    onUnload: () => {
-        // Clear all patches cleanly to prevent app hangs or memory leak panics on plug reload
-        for (const unpatch of activePatches) {
-            if (typeof unpatch === "function") unpatch();
-        }
-        activePatches = [];
-        executionQueue.clear();
+async function processMessage(message: any): Promise<void> {
+    for (const id of getIds(message)) {
+        await resolveUser(id);
     }
+}
+
+export const onLoad = () => {
+    unpatch = before("dispatch", FluxDispatcher, (args: any[]) => {
+        const ev = args[0];
+        if (!ev?.type) return;
+
+        if (ev.type === "MESSAGE_CREATE") {
+            processMessage(ev.message);
+        }
+
+        if (ev.type === "LOAD_MESSAGES_SUCCESS") {
+            for (const msg of ev.messages ?? []) {
+                processMessage(msg);
+            }
+        }
+    });
+};
+
+export const onUnload = () => {
+    unpatch?.();
+    fetched.clear();
 };
