@@ -2,58 +2,79 @@ import { findByProps } from "@vendetta/metro";
 import { FluxDispatcher } from "@vendetta/metro/common";
 import { before } from "@vendetta/patcher";
 
-const RestAPI = findByProps("get", "post");
+const RestAPI = findByProps("getAPIBaseURL", "get", "post");
+const UserStore = findByProps("getUser", "getCurrentUser");
 
-const fetched = new Set<string>();
 let unpatch: () => void;
+const fetchingCache = new Set<string>();
 
-async function resolveUser(id: string): Promise<void> {
-    if (fetched.has(id)) return;
-    fetched.add(id);
+async function fetchAndCacheUser(id: string): Promise<void> {
+    if (!id || UserStore?.getUser(id) || fetchingCache.has(id)) return;
 
+    fetchingCache.add(id);
     try {
         const res = await RestAPI.get({ url: `/users/${id}` });
-        if (res?.body) {
-            FluxDispatcher.dispatch({ type: "USER_UPDATE", user: res.body });
-        }
-    } catch (e: any) {
-        if (e?.status === 429) {
-            console.error(`[ValidUser] Rate limited, aborting`);
-            fetched.delete(id); // allow retry later
-        }
+        
+        FluxDispatcher.dispatch({
+            type: "USER_UPDATE",
+            user: res.body
+        });
+        
+        console.log(`[ValidUser] Cached user ${id}: ${res.body?.username}`);
+    } catch (err: any) {
+        console.error(`[ValidUser] Failed to resolve user ${id}:`, err?.status);
+    } finally {
+        fetchingCache.delete(id);
     }
 }
 
-function getIds(message: any): string[] {
-    const fromMentions = (message.mentions ?? []).map((u: any) => u.id);
-    const fromContent = [...(message.content ?? "").matchAll(/<@!?(\d+)>/g)].map((m: any) => m[1]);
-    return [...new Set([...fromMentions, ...fromContent])];
-}
-
-async function processMessage(message: any): Promise<void> {
-    for (const id of getIds(message)) {
-        await resolveUser(id);
+function extractUserIdFromMention(mention: any): string | null {
+    // Handle different mention formats
+    if (typeof mention === "string" && mention.match(/^\d+$/)) {
+        return mention;
     }
+    if (mention?.userId) return mention.userId;
+    if (mention?.id) return mention.id;
+    return null;
 }
 
 export const onLoad = () => {
-    unpatch = before("dispatch", FluxDispatcher, (args: any[]) => {
-        const ev = args[0];
-        if (!ev?.type) return;
+    console.log(`[ValidUser] Plugin loaded - hooking mention taps`);
+    
+    // Try to find and patch mention tap handlers
+    try {
+        const MentionModule = findByProps("Mention") || findByProps("UserMention");
+        
+        if (MentionModule?.default) {
+            unpatch = before("default", MentionModule, function(args: any[]) {
+                const props = args[0];
+                if (!props) return;
 
-        if (ev.type === "MESSAGE_CREATE") {
-            processMessage(ev.message);
+                const userId = extractUserIdFromMention(props);
+                
+                if (userId && !UserStore?.getUser(userId)) {
+                    // Hook the onPress/onClick handler
+                    const originalOnPress = props?.onPress || props?.onClick;
+                    
+                    props.onPress = props.onClick = async function(e: any) {
+                        // Fetch user before opening profile
+                        await fetchAndCacheUser(userId);
+                        
+                        // Call original handler if it exists
+                        if (typeof originalOnPress === "function") {
+                            return originalOnPress.call(this, e);
+                        }
+                    };
+                }
+            });
         }
-
-        if (ev.type === "LOAD_MESSAGES_SUCCESS") {
-            for (const msg of ev.messages ?? []) {
-                processMessage(msg);
-            }
-        }
-    });
+    } catch (err) {
+        console.warn("[ValidUser] Could not patch mention component:", err);
+    }
 };
 
 export const onUnload = () => {
+    console.log(`[ValidUser] Plugin unloaded`);
     unpatch?.();
-    fetched.clear();
+    fetchingCache.clear();
 };
