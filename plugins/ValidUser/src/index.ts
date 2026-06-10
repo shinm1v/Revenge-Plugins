@@ -52,6 +52,29 @@ function isUserCached(userId: string): boolean {
     return !!user;
 }
 
+async function forceUIRefresh(channelId: string, messageId: string, content: string) {
+    const Dispatcher = findByProps("dispatch", "subscribe");
+    
+    // Step 1: Force this specific message view container to drop its cached layout tokens
+    Dispatcher.dispatch({
+        type: "MESSAGE_UPDATE",
+        message: {
+            id: messageId,
+            channel_id: channelId,
+            content: content 
+        }
+    });
+
+    await sleep(25);
+
+    // Step 2: Flush the layout buffer to enforce immediate re-parsing with new profiles
+    Dispatcher.dispatch({
+        type: "LOAD_MESSAGES_SUCCESS",
+        channelId: channelId,
+        messages: []
+    });
+}
+
 async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
     const GatewayConnection = findByProps("getGateway", "send");
     const SelectedGuildStore = findByProps("getGuildId", "getChannelId");
@@ -70,39 +93,47 @@ async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
 
     logger.log(`[ValidUser] Sending bulk gateway request for ${userIds.length} users.`);
 
-    ws.send(8, {
+    ws.send(8, { // OP 8: REQUEST_GUILD_MEMBERS
         guild_id: currentGuildId,
         user_ids: userIds,
         presences: false
     });
 
-    await sleep(500);
+    await sleep(400); // Allow time for WebSocket payload round-trip stream
     return true;
 }
 
 async function fetchUsersViaAPI(userId: string, token: string, API: any, Dispatcher: any) {
+    // Correctly strip potential internal string wrappers or objects around the authorization token string
+    const cleanToken = typeof token === "string" ? token : (token as any)?.token || "";
+    
     const res = await API.get({
         url: `/users/${userId}`,
         headers: {
-            Authorization: token
+            // Ensure no leading spaces or formatting breaks exist
+            Authorization: cleanToken.trim()
         }
     });
-    Dispatcher.dispatch({
-        type: "USER_UPDATE",
-        user: res.body
-    });
-    return res.body.username;
+
+    if (res.body) {
+        Dispatcher.dispatch({
+            type: "USER_UPDATE",
+            user: res.body
+        });
+        return res.body.username;
+    }
+    throw new Error("Empty API response body");
 }
 
 async function fixUnknownMentions(message: any) {
     const ids = extractAllMentionIds(message);
+    const channelId = message.channel_id;
+    const messageId = message.id;
 
     if (ids.length === 0) {
         logger.log("[ValidUser] No mention IDs found in message or embeds");
         return;
     }
-
-    const Dispatcher = findByProps("dispatch", "subscribe");
 
     const uncachedIds: string[] = [];
     for (const userId of ids) {
@@ -111,45 +142,49 @@ async function fixUnknownMentions(message: any) {
         }
     }
 
+    // Modern atomic re-render fallback
     if (uncachedIds.length === 0) {
-        logger.log("[ValidUser] All users already cached, refreshing UI only");
-        Dispatcher.dispatch({ type: "JUMP_TO_FIRST_MESSAGE" });
-        await sleep(50);
-        Dispatcher.dispatch({ type: "JUMP_TO_LAST_MESSAGE" });
+        logger.log("[ValidUser] All users already cached, forcing layout re-parse");
+        if (channelId && messageId) {
+            await forceUIRefresh(channelId, messageId, message.content);
+        }
         return;
     }
 
-    logger.log(`[ValidUser] ${uncachedIds.length} uncached user(s) out of ${ids.length} total`);
+    logger.log(`[ValidUser] Processing ${uncachedIds.length} uncached user(s) out of ${ids.length} total`);
 
     const BULK_THRESHOLD = 5;
     let success = false;
 
-    if (uncachedIds.length > BULK_THRESHOLD) {
-        logger.log(`[ValidUser] Using gateway bulk fetch for ${uncachedIds.length} users`);
+    // Only attempt gateway requests if we are inside a Guild/Server channel context
+    const SelectedGuildStore = findByProps("getGuildId");
+    if (uncachedIds.length > BULK_THRESHOLD && SelectedGuildStore?.getGuildId?.()) {
+        logger.log(`[ValidUser] Attempting gateway bulk fetch...`);
         success = await fetchUsersViaGateway(uncachedIds);
     }
 
     if (!success) {
-        logger.log(`[ValidUser] Falling back to individual API requests for ${uncachedIds.length} users`);
+        logger.log(`[ValidUser] Using individual API fallback loop for ${uncachedIds.length} users`);
         
         const API = findByProps("get", "post");
+        const Dispatcher = findByProps("dispatch", "subscribe");
         const TokenStore = findByProps("getToken");
         const token = TokenStore?.getToken();
 
         if (!token) {
-            logger.error("[ValidUser] Failed to get auth token");
+            logger.error("[ValidUser] Aborted: Token unavailable.");
             return;
         }
 
-        const safetyDelay = uncachedIds.length > 10 ? 400 : 200;
+        const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
 
         for (let i = 0; i < uncachedIds.length; i++) {
             const userId = uncachedIds[i];
             try {
                 const username = await fetchUsersViaAPI(userId, token, API, Dispatcher);
-                logger.log(`[ValidUser] Cached: ${username} (${userId}) [${i+1}/${uncachedIds.length}]`);
+                logger.log(`[ValidUser] Successfully cached: ${username} [${i+1}/${uncachedIds.length}]`);
             } catch (err) {
-                logger.error(`[ValidUser] Failed to fetch ${userId}:`, err);
+                logger.error(`[ValidUser] HTTP Fetch Failed for ID ${userId}:`, err);
             }
             
             if (i < uncachedIds.length - 1) {
@@ -158,11 +193,11 @@ async function fixUnknownMentions(message: any) {
         }
     }
 
-    Dispatcher.dispatch({ type: "JUMP_TO_FIRST_MESSAGE" });
-    await sleep(50);
-    Dispatcher.dispatch({ type: "JUMP_TO_LAST_MESSAGE" });
-
-    logger.log(`[ValidUser] UI refreshed`);
+    // Perform final unified visual update
+    if (channelId && messageId) {
+        await forceUIRefresh(channelId, messageId, message.content);
+        logger.log(`[ValidUser] Interface token caches cleared and updated successfully`);
+    }
 }
 
 let unpatchOpenLazy: (() => void) | null = null;
@@ -227,12 +262,12 @@ export default {
             });
         });
 
-        logger.log("[ValidUser] Loaded.");
+        logger.log("[ValidUser] Loaded smoothly.");
     },
 
     onUnload() {
         unpatchOpenLazy?.();
         unpatchOpenLazy = null;
-        logger.log("[ValidUser] Unloaded.");
+        logger.log("[ValidUser] Unloaded safely.");
     },
 };
