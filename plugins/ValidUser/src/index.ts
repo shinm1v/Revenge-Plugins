@@ -58,11 +58,24 @@ async function fixUnknownMentions(message: any) {
 
     const API = findByProps("get", "post");
     const Dispatcher = findByProps("dispatch", "subscribe");
+    const TokenStore = findByProps("getToken");
+
+    const token = TokenStore?.getToken();
+    
+    if (!token) {
+        logger.error("[ValidUser] Failed to get auth token");
+        return;
+    }
 
     try {
         for (let i = 0; i < ids.length; i++) {
             const userId = ids[i];
-            const res = await API.get({ url: `/users/${userId}` });
+            const res = await API.get({
+                url: `/users/${userId}`,
+                headers: {
+                    Authorization: token
+                }
+            });
             Dispatcher.dispatch({
                 type: "USER_UPDATE",
                 user: res.body
@@ -74,7 +87,6 @@ async function fixUnknownMentions(message: any) {
             }
         }
 
-        // CHANNEL_SELECT preserves embed formatting
         Dispatcher.dispatch({
             type: "CHANNEL_SELECT",
             channelId: message.channel_id
