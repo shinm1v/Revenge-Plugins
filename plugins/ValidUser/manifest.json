@@ -1,6 +1,6 @@
 {
   "name": "ValidUser",
-  "description": "Fixes unresolved user mentions by fetching missing user data.",
+  "description": "Fixes unresolved user mentions like @uknown-user.",
   "authors": [
     {
       "name": "fshin",
