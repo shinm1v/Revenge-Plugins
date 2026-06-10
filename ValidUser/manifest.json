@@ -1,1 +1,1 @@
-{"name":"ValidUser","description":"Fixes unresolved user mentions by fetching missing user data.","authors":[{"name":"fshin","id":"1381008677301129257"}],"main":"index.js","vendetta":{"icon":"ic_mention_24px"},"hash":"98154395dee6aa5c0f31f60ff0c30e37f15ae09e7f5a82c07fffe3f09cacc622"}
+{"name":"ValidUser","description":"Fixes unresolved user mentions by fetching missing user data.","authors":[{"name":"fshin","id":"1381008677301129257"}],"main":"index.js","vendetta":{"icon":"ic_mention_24px"},"hash":"7a45967c9df4930260921727bff3d406713237bed0fd5d81eb3c98468cc83410"}
