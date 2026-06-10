@@ -46,6 +46,54 @@ function extractAllMentionIds(message: any): string[] {
     return [...new Set(ids)];
 }
 
+function isUserCached(userId: string): boolean {
+    const UserStore = findByProps("getUser", "getCurrentUser");
+    const user = UserStore?.getUser?.(userId);
+    return !!user;
+}
+
+async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
+    const GatewayConnection = findByProps("getGateway", "send");
+    const SelectedGuildStore = findByProps("getGuildId", "getChannelId");
+    
+    const currentGuildId = SelectedGuildStore?.getGuildId?.();
+    if (!currentGuildId) {
+        logger.warn("[ValidUser] No guild context for gateway request");
+        return false;
+    }
+
+    const ws = GatewayConnection?.getGateway?.();
+    if (!ws) {
+        logger.warn("[ValidUser] Gateway connection not available");
+        return false;
+    }
+
+    logger.log(`[ValidUser] Sending bulk gateway request for ${userIds.length} users.`);
+
+    ws.send(8, {
+        guild_id: currentGuildId,
+        user_ids: userIds,
+        presences: false
+    });
+
+    await sleep(500);
+    return true;
+}
+
+async function fetchUsersViaAPI(userId: string, token: string, API: any, Dispatcher: any) {
+    const res = await API.get({
+        url: `/users/${userId}`,
+        headers: {
+            Authorization: token
+        }
+    });
+    Dispatcher.dispatch({
+        type: "USER_UPDATE",
+        user: res.body
+    });
+    return res.body.username;
+}
+
 async function fixUnknownMentions(message: any) {
     const ids = extractAllMentionIds(message);
 
@@ -54,48 +102,67 @@ async function fixUnknownMentions(message: any) {
         return;
     }
 
-    logger.log(`[ValidUser] Fixing ${ids.length} unknown mention(s): ${ids.join(", ")}`);
-
-    const API = findByProps("get", "post");
     const Dispatcher = findByProps("dispatch", "subscribe");
-    const TokenStore = findByProps("getToken");
 
-    const token = TokenStore?.getToken();
-    
-    if (!token) {
-        logger.error("[ValidUser] Failed to get auth token");
+    const uncachedIds: string[] = [];
+    for (const userId of ids) {
+        if (!isUserCached(userId)) {
+            uncachedIds.push(userId);
+        }
+    }
+
+    if (uncachedIds.length === 0) {
+        logger.log("[ValidUser] All users already cached, refreshing UI only");
+        Dispatcher.dispatch({ type: "JUMP_TO_FIRST_MESSAGE" });
+        await sleep(50);
+        Dispatcher.dispatch({ type: "JUMP_TO_LAST_MESSAGE" });
         return;
     }
 
-    try {
-        for (let i = 0; i < ids.length; i++) {
-            const userId = ids[i];
-            const res = await API.get({
-                url: `/users/${userId}`,
-                headers: {
-                    Authorization: token
-                }
-            });
-            Dispatcher.dispatch({
-                type: "USER_UPDATE",
-                user: res.body
-            });
-            logger.log(`[ValidUser] Cached user: ${res.body.username} (${userId}) [${i+1}/${ids.length}]`);
-            
-            if (i < ids.length - 1) {
-                await sleep(150);
-            }
+    logger.log(`[ValidUser] ${uncachedIds.length} uncached user(s) out of ${ids.length} total`);
+
+    const BULK_THRESHOLD = 5;
+    let success = false;
+
+    if (uncachedIds.length > BULK_THRESHOLD) {
+        logger.log(`[ValidUser] Using gateway bulk fetch for ${uncachedIds.length} users`);
+        success = await fetchUsersViaGateway(uncachedIds);
+    }
+
+    if (!success) {
+        logger.log(`[ValidUser] Falling back to individual API requests for ${uncachedIds.length} users`);
+        
+        const API = findByProps("get", "post");
+        const TokenStore = findByProps("getToken");
+        const token = TokenStore?.getToken();
+
+        if (!token) {
+            logger.error("[ValidUser] Failed to get auth token");
+            return;
         }
 
-        Dispatcher.dispatch({
-            type: "CHANNEL_SELECT",
-            channelId: message.channel_id
-        });
+        const safetyDelay = uncachedIds.length > 10 ? 400 : 200;
 
-        logger.log(`[ValidUser] Dispatched CHANNEL_SELECT to refresh UI`);
-    } catch (err) {
-        logger.error("[ValidUser] Failed to fix mentions:", err);
+        for (let i = 0; i < uncachedIds.length; i++) {
+            const userId = uncachedIds[i];
+            try {
+                const username = await fetchUsersViaAPI(userId, token, API, Dispatcher);
+                logger.log(`[ValidUser] Cached: ${username} (${userId}) [${i+1}/${uncachedIds.length}]`);
+            } catch (err) {
+                logger.error(`[ValidUser] Failed to fetch ${userId}:`, err);
+            }
+            
+            if (i < uncachedIds.length - 1) {
+                await sleep(safetyDelay);
+            }
+        }
     }
+
+    Dispatcher.dispatch({ type: "JUMP_TO_FIRST_MESSAGE" });
+    await sleep(50);
+    Dispatcher.dispatch({ type: "JUMP_TO_LAST_MESSAGE" });
+
+    logger.log(`[ValidUser] UI refreshed`);
 }
 
 let unpatchOpenLazy: (() => void) | null = null;
