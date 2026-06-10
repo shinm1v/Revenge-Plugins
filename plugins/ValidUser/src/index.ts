@@ -12,27 +12,69 @@ const MentionIcon = getAssetIDByName("ic_mention_24px") ??
     getAssetIDByName("MentionIcon") ??
     getAssetIDByName("mention");
 
-async function openMentionProfile(content: string) {
-    const ids = [...content.matchAll(/<@!?(\d+)>/g)].map(x => x[1]);
+function extractIdsFromText(text: string): string[] {
+    if (!text) return [];
+    return [...text.matchAll(/<@!?(\d+)>/g)].map(x => x[1]);
+}
+
+function extractAllMentionIds(message: any): string[] {
+    const ids: string[] = [];
+    
+    if (message.content) {
+        ids.push(...extractIdsFromText(message.content));
+    }
+    
+    if (message.embeds && Array.isArray(message.embeds)) {
+        for (const embed of message.embeds) {
+            if (embed.rawTitle) {
+                ids.push(...extractIdsFromText(embed.rawTitle));
+            }
+            if (embed.rawDescription) {
+                ids.push(...extractIdsFromText(embed.rawDescription));
+            }
+            if (embed.fields && Array.isArray(embed.fields)) {
+                for (const field of embed.fields) {
+                    if (field.name) ids.push(...extractIdsFromText(field.name));
+                    if (field.value) ids.push(...extractIdsFromText(field.value));
+                }
+            }
+        }
+    }
+    
+    return [...new Set(ids)];
+}
+
+async function fixUnknownMentions(message: any) {
+    const ids = extractAllMentionIds(message);
     
     if (ids.length === 0) {
-        logger.log("[ValidUser] No mention IDs found in content");
+        logger.log("[ValidUser] No mention IDs found in message or embeds");
         return;
     }
     
-    const userId = ids[0];
-    logger.log(`[ValidUser] Opening profile for user: ${userId}`);
+    logger.log(`[ValidUser] Fixing ${ids.length} unknown mention(s): ${ids.join(", ")}`);
+    
+    const API = findByProps("get", "post");
+    const Dispatcher = findByProps("dispatch", "subscribe");
     
     try {
-        const UserAPI = findByProps("fetchProfile", "insertStaticUser");
-        const Profile = findByProps("showUserProfile", "navigateToStage");
+        for (const userId of ids) {
+            const res = await API.get({ url: `/users/${userId}` });
+            Dispatcher.dispatch({
+                type: "USER_UPDATE",
+                user: res.body
+            });
+            logger.log(`[ValidUser] Cached user: ${res.body.username} (${userId})`);
+        }
         
-        await UserAPI.fetchProfile(userId);
+        Dispatcher.dispatch({
+            type: "MESSAGE_UPDATE",
+            message: { ...message }
+        });
         
-        Profile.showUserProfile({ userId });
-        logger.log(`[ValidUser] Successfully opened profile for ${userId}`);
+        logger.log(`[ValidUser] Dispatched MESSAGE_UPDATE to re-render`);
     } catch (err) {
-        logger.error("[ValidUser] Failed to open profile:", err);
+        logger.error("[ValidUser] Failed to fix mentions:", err);
     }
 }
 
@@ -43,10 +85,10 @@ export default {
         unpatchOpenLazy = before("openLazy", ActionSheet, ([comp, args, msg]) => {
             if (args !== "MessageLongPressActionSheet" || !msg?.message) return;
 
-            const content: string = msg.message.content ?? "";
+            const message = msg.message;
+            const ids = extractAllMentionIds(message);
             
-            const hasMentions = content.match(/<@!?(\d+)/);
-            if (!hasMentions) return;
+            if (ids.length === 0) return;
 
             comp.then((instance: any) => {
                 const unpatch = after("default", instance, (_: any, component: any) => {
@@ -62,14 +104,14 @@ export default {
                         return;
                     }
 
-                    const mentionButton = React.createElement(ActionSheetRow, {
-                        label: "Open Mention Profile",
+                    const fixButton = React.createElement(ActionSheetRow, {
+                        label: ids.length === 1 ? "Fix Unknown Mention" : `Fix ${ids.length} Unknown Mentions`,
                         icon: React.createElement(ActionSheetRow.Icon, {
                             source: MentionIcon,
                         }),
                         onPress: () => {
                             ActionSheet.hideActionSheet();
-                            openMentionProfile(content);
+                            fixUnknownMentions(message);
                         },
                     });
 
@@ -83,7 +125,7 @@ export default {
                         );
                         if (!groupChildren) continue;
 
-                        groupChildren.unshift(mentionButton);
+                        groupChildren.unshift(fixButton);
                         inserted = true;
                         break;
                     }
@@ -91,7 +133,7 @@ export default {
                     if (!inserted) {
                         logger.warn("[ValidUser] Could not insert button, adding as new group");
                         groups.unshift(
-                            React.createElement(ActionSheetRow.Group, null, mentionButton)
+                            React.createElement(ActionSheetRow.Group, null, fixButton)
                         );
                     }
                 });
