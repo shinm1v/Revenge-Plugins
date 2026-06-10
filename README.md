@@ -3,4 +3,4 @@
 # How to install?
 Paste the plugin URL into the Plugins page of Revenge, following a basic format of:
 
-`https://shinm1v.github.io/Revenge-Plugins/ValidUser`
+``https://shinm1v.github.io/Revenge-Plugins/ValidUser``
