@@ -1,7 +1,6 @@
-# Vendetta Plugins Template
-This repo contains a template for creating [Vendetta](https://github.com/vendetta-mod/Vendetta) plugins.
+# Revenge Plugins
 
 # How to install?
-Paste a plugin URL into the Plugins page of Vendetta, following a basic format of:
+Paste the plugin URL into the Plugins page of Revenge, following a basic format of:
 
-https://shinm1v.github.io/Revenge-Plugins/`PLUGIN_NAME`
+`https://shinm1v.github.io/Revenge-Plugins/ValidUser`
