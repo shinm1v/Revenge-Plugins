@@ -1,144 +1,109 @@
 import { findByProps } from "@vendetta/metro";
-import { FluxDispatcher } from "@vendetta/metro/common";
-import { before } from "@vendetta/patcher";
+import { before, after } from "@vendetta/patcher";
+import { logger } from "@vendetta";
+import { React } from "@vendetta/metro/common";
+import { findInReactTree } from "@vendetta/utils";
+import { getAssetIDByName } from "@vendetta/ui/assets";
 
-const RestAPI = findByProps("getAPIBaseURL", "get", "post");
-const UserStore = findByProps("getUser", "getCurrentUser");
-const MessageStore = findByProps("getMessage", "getMessages");
+const ActionSheet = findByProps("openLazy", "hideActionSheet");
+const { ActionSheetRow } = findByProps("ActionSheetRow");
 
-let unpatches: (() => void)[] = [];
+const MentionIcon = getAssetIDByName("ic_mention_24px") ??
+    getAssetIDByName("MentionIcon") ??
+    getAssetIDByName("mention");
 
-async function fetchAndUpdateUser(id: string): Promise<void> {
-    try {
-        const res = await RestAPI.get({ url: `/users/${id}` });
-        
-        if (res?.body) {
-            console.log(`[ValidUser] Fetched user ${id}: ${res.body.username}`);
-            
-            // Update UserStore
-            FluxDispatcher.dispatch({
-                type: "USER_UPDATE",
-                user: res.body
-            });
-            
-            return;
-        }
-    } catch (err: any) {
-        console.error(`[ValidUser] Failed to fetch user ${id}:`, err?.status);
+async function openMentionProfile(content: string) {
+    const ids = [...content.matchAll(/<@!?(\d+)>/g)].map(x => x[1]);
+    
+    if (ids.length === 0) {
+        logger.log("[ValidUser] No mention IDs found in content");
+        return;
     }
-}
-
-function extractIdFromContent(content: string): string | null {
-    // Extract ID from <@ID> format
-    const match = content.match(/<@!?(\d+)>/);
-    return match ? match[1] : null;
-}
-
-export const onLoad = () => {
-    console.log(`[ValidUser] Plugin loaded - patching message components`);
+    
+    const userId = ids[0];
+    logger.log(`[ValidUser] Opening profile for user: ${userId}`);
     
     try {
-        // Find the message row/text component that renders mentions
-        const MessageContentModule = findByProps("MessageContent") || findByProps("childrenRender");
+        const UserAPI = findByProps("fetchProfile", "insertStaticUser");
+        const Profile = findByProps("showUserProfile", "navigateToStage");
         
-        if (!MessageContentModule) {
-            console.warn("[ValidUser] Could not find message content module");
-            return;
-        }
-
-        // Patch the Mention component rendering
-        const MentionModule = findByProps("Mention");
+        await UserAPI.fetchProfile(userId);
         
-        if (MentionModule?.default) {
-            const unpatch = before("default", MentionModule, function(args: any[]) {
-                const props = args[0];
-                
-                if (!props?.userId) return;
-
-                const userId = props.userId;
-                const user = UserStore?.getUser(userId);
-
-                // If user is not cached, hook the press handler
-                if (!user?.username) {
-                    const originalOnPress = props?.onPress;
-                    
-                    props.onPress = async function(e: any) {
-                        console.log(`[ValidUser] Mention tapped for uncached user ${userId}`);
-                        
-                        // Fetch the user data
-                        await fetchAndUpdateUser(userId);
-                        
-                        // Dispatch message update to force re-render
-                        FluxDispatcher.dispatch({
-                            type: "MESSAGE_UPDATE"
-                        });
-                        
-                        // Call original handler
-                        if (typeof originalOnPress === "function") {
-                            originalOnPress.call(this, e);
-                        }
-                    };
-                }
-            });
-
-            unpatches.push(unpatch);
-        }
-
-        // Also patch raw text mentions (for <@ID> that aren't parsed as components)
-        const TextModule = findByProps("Text");
-        
-        if (TextModule?.default) {
-            const unpatch = before("default", TextModule, function(args: any[]) {
-                const props = args[0];
-                
-                // Check if this text node contains a mention like <@ID>
-                if (props?.children && typeof props.children === "string") {
-                    const content = props.children;
-                    
-                    if (content.includes("<@")) {
-                        const userId = extractIdFromContent(content);
-                        
-                        if (userId) {
-                            const user = UserStore?.getUser(userId);
-                            
-                            // If not cached and this is a clickable element
-                            if (!user?.username && (props?.onPress || props?.onClick)) {
-                                const originalOnPress = props?.onPress || props?.onClick;
-                                
-                                props.onPress = props.onClick = async function(e: any) {
-                                    console.log(`[ValidUser] Raw mention tapped for ${userId}`);
-                                    
-                                    await fetchAndUpdateUser(userId);
-                                    
-                                    FluxDispatcher.dispatch({
-                                        type: "MESSAGE_UPDATE"
-                                    });
-                                    
-                                    if (typeof originalOnPress === "function") {
-                                        originalOnPress.call(this, e);
-                                    }
-                                };
-                            }
-                        }
-                    }
-                }
-            });
-
-            unpatches.push(unpatch);
-        }
+        Profile.showUserProfile({ userId });
+        logger.log(`[ValidUser] Successfully opened profile for ${userId}`);
     } catch (err) {
-        console.error("[ValidUser] Error during patch setup:", err);
+        logger.error("[ValidUser] Failed to open profile:", err);
     }
-};
+}
 
-export const onUnload = () => {
-    console.log(`[ValidUser] Plugin unloaded`);
-    
-    for (const unpatch of unpatches) {
-        if (typeof unpatch === "function") {
-            unpatch();
-        }
-    }
-    
-    unpatches = [];
+let unpatchOpenLazy: (() => void) | null = null;
+
+export default {
+    onLoad() {
+        unpatchOpenLazy = before("openLazy", ActionSheet, ([comp, args, msg]) => {
+            if (args !== "MessageLongPressActionSheet" || !msg?.message) return;
+
+            const content: string = msg.message.content ?? "";
+            
+            const hasMentions = content.match(/<@!?(\d+)/);
+            if (!hasMentions) return;
+
+            comp.then((instance: any) => {
+                const unpatch = after("default", instance, (_: any, component: any) => {
+                    React.useEffect(() => () => { unpatch(); }, []);
+
+                    const groups: any[] = findInReactTree(
+                        component,
+                        (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
+                    );
+
+                    if (!groups?.length) {
+                        logger.warn("[ValidUser] Could not find ActionSheetRowGroups");
+                        return;
+                    }
+
+                    const mentionButton = React.createElement(ActionSheetRow, {
+                        label: "Open Mention Profile",
+                        icon: React.createElement(ActionSheetRow.Icon, {
+                            source: MentionIcon,
+                        }),
+                        onPress: () => {
+                            ActionSheet.hideActionSheet();
+                            openMentionProfile(content);
+                        },
+                    });
+
+                    let inserted = false;
+                    for (let gi = 0; gi < groups.length; gi++) {
+                        const groupChildren: any[] = findInReactTree(
+                            groups[gi],
+                            (c: any) => Array.isArray(c) && c.some((child: any) =>
+                                child?.type?.name === "ActionSheetRow"
+                            )
+                        );
+                        if (!groupChildren) continue;
+
+                        groupChildren.unshift(mentionButton);
+                        inserted = true;
+                        break;
+                    }
+
+                    if (!inserted) {
+                        logger.warn("[ValidUser] Could not insert button, adding as new group");
+                        groups.unshift(
+                            React.createElement(ActionSheetRow.Group, null, mentionButton)
+                        );
+                    }
+                });
+            });
+        });
+
+        logger.log("[ValidUser] Loaded.");
+    },
+
+    onUnload() {
+        unpatchOpenLazy?.();
+        unpatchOpenLazy = null;
+        logger.log("[ValidUser] Unloaded.");
+    },
 };
