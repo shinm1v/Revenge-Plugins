@@ -1,6 +1,6 @@
 {
   "name": "ValidUser",
-  "description": "Fixes unresolved user mentions like @uknown-user.",
+  "description": "Fixes unresolved user mentions like @uknown-user to a normal clickable mention.",
   "authors": [
     {
       "name": "fshin",
