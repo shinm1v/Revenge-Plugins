@@ -1,1 +1,1 @@
-{"name":"InfoCommands","description":"Get user, server, and invite information with clean embeds","authors":[{"name":"fshin","id":"1381008677301129257"}],"main":"index.js","vendetta":{"icon":"ic_info_24px"},"hash":"96ba4d0d814ffe7471416264d3f57862b417f097bc02e9d6d43f8f71019a8e74"}
+{"name":"InfoCommands","description":"commands to Get user, server, and invite information","authors":[{"name":"fshin","id":"1381008677301129257"}],"main":"index.js","vendetta":{"icon":"ic_info_24px"},"hash":"96ba4d0d814ffe7471416264d3f57862b417f097bc02e9d6d43f8f71019a8e74"}
