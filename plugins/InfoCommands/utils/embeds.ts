@@ -93,21 +93,34 @@ export async function fetchInvite(inviteCode: string) {
     }
 }
 
-export function sendMessage(channelId: string, content: string, isEphemeral: boolean = false) {
-    const { sendBotMessage } = findByProps("sendBotMessage", "sendMessage", "receiveMessage");
+export function createSafeEmbed(options: {
+    color?: number;
+    title?: string;
+    description?: string;
+    author?: { name: string; icon_url?: string };
+    thumbnail?: { url: string };
+    image?: { url: string };
+    fields?: Array<{ name: string; value: string; inline?: boolean }>;
+    footer?: { text: string; icon_url?: string };
+}): any {
+    const embed: any = {};
     
-    if (isEphemeral) {
-        return {
-            type: 4,
-            data: {
-                content: content,
-                flags: 64
-            }
-        };
-    } else {
-        sendBotMessage(channelId, content);
-        return null;
+    if (options.color !== undefined) embed.color = options.color;
+    if (options.title) embed.title = options.title;
+    if (options.description) embed.description = options.description;
+    if (options.author) embed.author = options.author;
+    if (options.fields?.length) embed.fields = options.fields;
+    if (options.footer) embed.footer = options.footer;
+    
+    if (options.thumbnail?.url) {
+        embed.thumbnail = { url: options.thumbnail.url };
     }
+    
+    if (options.image?.url) {
+        embed.image = { url: options.image.url };
+    }
+    
+    return embed;
 }
 
 export function sendEmbed(channelId: string, embed: any, isEphemeral: boolean = false) {
