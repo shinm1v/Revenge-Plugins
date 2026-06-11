@@ -9,7 +9,12 @@ import {
     formatTimestampFromSnowflake,
     formatAvatarLinks, 
     maskUrl, 
-    getGuildIconUrl 
+    getGuildIconUrl,
+    getBannerUrl,
+    getGuildBannerUrl,
+    getGuildSplashUrl,
+    getGuildDiscoverySplashUrl,
+    decodeBadges
 } from "./utils/embeds.js";
 
 const ThemeStore = findByStoreName("ThemeStore");
@@ -66,12 +71,14 @@ const userInfoCommand = {
             
             const avatarLinks = user.avatar ? formatAvatarLinks(user.avatar, user.id) : "None";
             
-            // Use created_at from API or fallback to Snowflake timestamp
-            const createdTimestamp = user.created_at 
-                ? Date.parse(user.created_at) 
-                : null;
-            const createdDate = createdTimestamp 
-                ? formatTimestamp(createdTimestamp) 
+            const bannerUrl = user.banner ? getBannerUrl(user.id, user.banner) : null;
+            const bannerLink = bannerUrl ? maskUrl("View Banner", bannerUrl) : "None";
+            
+            const accentColor = user.accent_color ? `#${user.accent_color.toString(16).padStart(6, '0')}` : "None";
+            const badges = decodeBadges(user.public_flags || 0);
+            
+            const createdDate = user.created_at 
+                ? formatTimestamp(Date.parse(user.created_at)) 
                 : formatTimestampFromSnowflake(user.id);
             
             const fields = [
@@ -80,7 +87,11 @@ const userInfoCommand = {
                 { name: "Mention", value: `<@${user.id}>`, inline: true },
                 { name: "Created", value: createdDate, inline: true },
                 { name: "Avatar", value: avatarLinks, inline: true },
-                { name: "Bot", value: user.bot ? "Yes" : "No", inline: true }
+                { name: "Banner", value: bannerLink, inline: true },
+                { name: "Accent Color", value: accentColor, inline: true },
+                { name: "Badges", value: badges, inline: false },
+                { name: "Bot", value: user.bot ? "Yes" : "No", inline: true },
+                { name: "ID", value: `\`${user.id}\``, inline: false }
             ];
             
             if (user.avatar_decoration) {
@@ -90,12 +101,11 @@ const userInfoCommand = {
                 fields.push({ name: "SKU", value: user.avatar_decoration, inline: false });
             }
             
-            fields.push({ name: "ID", value: `\`${user.id}\``, inline: false });
-            
             const embed = {
                 color: EMBED_COLOR(),
                 type: "rich",
                 author: { name: user.username, icon_url: avatarUrl },
+                image: bannerUrl ? { url: bannerUrl } : undefined,
                 fields: fields
             };
             
@@ -123,7 +133,7 @@ const userInfoCommand = {
     type: 1,
 };
 
-// Server Info Command (uses ID)
+// Server Info Command
 const serverInfoCommand = {
     name: "serverinfo",
     displayName: "serverinfo",
@@ -170,36 +180,54 @@ const serverInfoCommand = {
                 "ANIMATED_BANNER": "Animated Banner",
                 "BANNER": "Banner",
                 "COMMUNITY": "Community",
+                "DISCOVERABLE": "Discoverable",
                 "INVITE_SPLASH": "Invite Splash",
                 "MEMBER_VERIFICATION_GATE_ENABLED": "Member Verification",
                 "NEWS": "News Channels",
                 "SOUNDBOARD": "Soundboard",
-                "VANITY_URL": "Vanity URL"
+                "VANITY_URL": "Vanity URL",
+                "WIDGET_ENABLED": "Widget Enabled"
             };
             
             const verificationMap = { 0: "None", 1: "Low", 2: "Medium", 3: "High", 4: "Highest" };
             const nsfwLevelMap = { 0: "Default", 1: "Explicit", 2: "Safe", 3: "Age Restricted" };
+            const mfaLevelMap = { 0: "None", 1: "Elevated" };
+            const explicitContentFilterMap = { 0: "Disabled", 1: "Members Without Roles", 2: "All Members" };
             
             const features = (guild.features || [])
-                .slice(0, 15)
+                .slice(0, 20)
                 .map(f => featureMap[f] || f.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, l => l.toUpperCase()))
                 .join(", ");
             
             const iconUrl = guild.icon ? getGuildIconUrl(guild.id, guild.icon) : null;
+            const bannerUrl = guild.banner ? getGuildBannerUrl(guild.id, guild.banner) : null;
+            const splashUrl = guild.splash ? getGuildSplashUrl(guild.id, guild.splash) : null;
+            const discoverySplashUrl = guild.discovery_splash ? getGuildDiscoverySplashUrl(guild.id, guild.discovery_splash) : null;
             
-            // Use created_at from API or fallback to Snowflake timestamp
-            const createdTimestamp = guild.created_at 
-                ? Date.parse(guild.created_at) 
-                : null;
-            const createdDate = createdTimestamp 
-                ? formatTimestamp(createdTimestamp) 
+            const createdDate = guild.created_at 
+                ? formatTimestamp(Date.parse(guild.created_at)) 
                 : formatTimestampFromSnowflake(guild.id);
             
+            const memberCount = guild.approximate_member_count || 0;
+            const presenceCount = guild.approximate_presence_count || 0;
+            const onlinePercentage = memberCount > 0 ? Math.round((presenceCount / memberCount) * 100) : 0;
+            
+            const afkTimeout = guild.afk_timeout ? `${guild.afk_timeout / 60} minutes` : "Not set";
+            const preferredLocale = guild.preferred_locale || "en-US";
+            
             const fields = [
+                { name: "Owner", value: `<@${guild.owner_id}>`, inline: true },
+                { name: "Owner ID", value: `\`${guild.owner_id}\``, inline: true },
                 { name: "Created", value: createdDate, inline: true },
+                { name: "Members", value: `${memberCount.toLocaleString()} total\n${presenceCount.toLocaleString()} online (${onlinePercentage}%)`, inline: true },
                 { name: "Boosts", value: `Level ${guild.premium_tier || 0}\n${guild.premium_subscription_count || 0} boosts`, inline: true },
                 { name: "Verification", value: verificationMap[guild.verification_level || 0], inline: true },
                 { name: "NSFW Level", value: nsfwLevelMap[guild.nsfw_level || 0], inline: true },
+                { name: "MFA Level", value: mfaLevelMap[guild.mfa_level || 0], inline: true },
+                { name: "Explicit Content Filter", value: explicitContentFilterMap[guild.explicit_content_filter || 0], inline: true },
+                { name: "AFK Timeout", value: afkTimeout, inline: true },
+                { name: "Locale", value: preferredLocale, inline: true },
+                { name: "Widget", value: guild.widget_enabled ? "Enabled" : "Disabled", inline: true },
                 { name: "Features", value: features || "None", inline: false }
             ];
             
@@ -215,6 +243,7 @@ const serverInfoCommand = {
                 title: guild.name,
                 description: guild.description || "No description.",
                 thumbnail: iconUrl ? { url: iconUrl } : undefined,
+                image: bannerUrl ? { url: bannerUrl } : (splashUrl ? { url: splashUrl } : (discoverySplashUrl ? { url: discoverySplashUrl } : undefined)),
                 fields: fields
             };
             
@@ -290,25 +319,27 @@ const inviteInfoCommand = {
             const guild = invite.guild;
             const memberCount = invite.approximate_member_count || 0;
             const onlineCount = invite.approximate_presence_count || 0;
+            const onlinePercentage = memberCount > 0 ? Math.round((onlineCount / memberCount) * 100) : 0;
             
-            // Use created_at from API or fallback to Snowflake timestamp
-            const createdTimestamp = guild.created_at 
-                ? Date.parse(guild.created_at) 
-                : null;
-            const createdDate = createdTimestamp 
-                ? formatTimestamp(createdTimestamp) 
+            const createdDate = guild.created_at 
+                ? formatTimestamp(Date.parse(guild.created_at)) 
                 : formatTimestampFromSnowflake(guild.id);
             
-            const expiresText = invite.expires_at ? new Date(invite.expires_at).toLocaleDateString() : "Never";
+            const expiresText = invite.expires_at ? formatDate(Date.parse(invite.expires_at)) : "Never";
+            const inviteUrl = `https://discord.gg/${invite.code}`;
+            
             const iconUrl = guild.icon ? getGuildIconUrl(guild.id, guild.icon) : null;
             
             const fields = [
-                { name: "Members", value: `${memberCount.toLocaleString()} total\n${onlineCount.toLocaleString()} online\n${(memberCount - onlineCount).toLocaleString()} offline`, inline: true },
+                { name: "Members", value: `${memberCount.toLocaleString()} total\n${onlineCount.toLocaleString()} online (${onlinePercentage}%)`, inline: true },
                 { name: "Created", value: createdDate, inline: true },
                 { name: "Boosts", value: `Level ${guild.premium_tier || 0}\n${guild.premium_subscription_count || 0} boosts`, inline: true },
+                { name: "Invite URL", value: maskUrl(inviteUrl, inviteUrl), inline: true },
                 { name: "Invite Code", value: `\`${invite.code}\``, inline: true },
                 { name: "Channel", value: `#${invite.channel?.name || "Unknown"}`, inline: true },
+                { name: "Channel ID", value: `\`${invite.channel?.id || "Unknown"}\``, inline: true },
                 { name: "Inviter", value: invite.inviter?.username || "Vanity URL", inline: true },
+                { name: "Inviter ID", value: invite.inviter ? `\`${invite.inviter.id}\`` : "N/A", inline: true },
                 { name: "Expires", value: expiresText, inline: true },
                 { name: "Max Uses", value: invite.max_uses?.toString() || "Unlimited", inline: true },
                 { name: "Server ID", value: `\`${guild.id}\``, inline: false }
