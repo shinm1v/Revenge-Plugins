@@ -3,6 +3,7 @@ import { semanticColors } from "@vendetta/ui";
 
 const ThemeStore = findByStoreName("ThemeStore");
 const { meta: { resolveSemanticColor } } = findByProps("colors", "meta");
+const API = findByProps("get", "post");
 
 export function getEmbedColor(): number {
     return parseInt(resolveSemanticColor(ThemeStore.theme, semanticColors.BACKGROUND_BASE_LOWER).slice(1), 16);
@@ -56,6 +57,56 @@ export function getStatusText(status: string): string {
         case "idle": return "Idle";
         case "dnd": return "Do Not Disturb";
         default: return "Offline";
+    }
+}
+
+export async function fetchUser(userId: string) {
+    const API = findByProps("get", "post");
+    try {
+        const response = await API.get({ url: `/users/${userId}` });
+        return response.body;
+    } catch (e) {
+        console.error("[API] Failed to fetch user:", e);
+        return null;
+    }
+}
+
+export async function fetchGuild(guildId: string) {
+    const API = findByProps("get", "post");
+    try {
+        const response = await API.get({ url: `/guilds/${guildId}` });
+        return response.body;
+    } catch (e) {
+        console.error("[API] Failed to fetch guild:", e);
+        return null;
+    }
+}
+
+export async function fetchInvite(inviteCode: string) {
+    const API = findByProps("get", "post");
+    try {
+        const response = await API.get({ url: `/invites/${inviteCode}` });
+        return response.body;
+    } catch (e) {
+        console.error("[API] Failed to fetch invite:", e);
+        return null;
+    }
+}
+
+export function sendMessage(channelId: string, content: string, isEphemeral: boolean = false) {
+    const { sendBotMessage } = findByProps("sendBotMessage", "sendMessage", "receiveMessage");
+    
+    if (isEphemeral) {
+        return {
+            type: 4,
+            data: {
+                content: content,
+                flags: 64
+            }
+        };
+    } else {
+        sendBotMessage(channelId, content);
+        return null;
     }
 }
 
