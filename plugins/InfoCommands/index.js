@@ -2,7 +2,7 @@ import * as common from "../../common";
 import { semanticColors } from "@vendetta/ui";
 import { registerCommand } from "@vendetta/commands";
 import { findByStoreName, findByProps } from "@vendetta/metro";
-import { fetchUser, fetchGuild, fetchInvite, formatTimestamp, formatAvatarLinks, maskUrl, getGuildIconUrl, formatDate } from "./utils/embeds";
+import { fetchUser, fetchGuild, fetchInvite, formatTimestamp, formatAvatarLinks, maskUrl, getGuildIconUrl, formatDate } from "./utils/embeds.js";
 
 const ThemeStore = findByStoreName("ThemeStore");
 const { meta: { resolveSemanticColor } } = findByProps("colors", "meta");
@@ -182,7 +182,7 @@ const serverInfoCommand = common.cmdDisplays({
                 return;
             }
             
-            const featureMap: Record<string, string> = {
+            const featureMap = {
                 "ANIMATED_ICON": "Animated Icon",
                 "BANNER": "Banner",
                 "COMMUNITY": "Community",
@@ -194,16 +194,16 @@ const serverInfoCommand = common.cmdDisplays({
                 "VANITY_URL": "Vanity URL",
             };
             
-            const verificationMap: Record<number, string> = {
+            const verificationMap = {
                 0: "None", 1: "Low", 2: "Medium", 3: "High", 4: "Highest"
             };
             
-            const nsfwLevelMap: Record<number, string> = {
+            const nsfwLevelMap = {
                 0: "Default", 1: "Explicit", 2: "Safe", 3: "Age Restricted"
             };
             
             const features = (guild.features || [])
-                .map((f: string) => featureMap[f] || f)
+                .map(f => featureMap[f] || f)
                 .sort()
                 .slice(0, 10);
             
@@ -304,7 +304,7 @@ const inviteInfoCommand = common.cmdDisplays({
                 return;
             }
             
-            const extractInviteCode = (input: string): string => {
+            const extractInviteCode = (input) => {
                 const urlMatch = input.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
                 if (urlMatch) return urlMatch[1];
                 const codeMatch = input.match(/^([a-zA-Z0-9_-]+)/);
@@ -327,7 +327,7 @@ const inviteInfoCommand = common.cmdDisplays({
             const memberCount = invite.approximate_member_count || 0;
             const onlineCount = invite.approximate_presence_count || 0;
             
-            const featureMap: Record<string, string> = {
+            const featureMap = {
                 "ANIMATED_ICON": "Animated Icon",
                 "COMMUNITY": "Community",
                 "INVITE_SPLASH": "Invite Splash",
@@ -337,16 +337,16 @@ const inviteInfoCommand = common.cmdDisplays({
                 "VANITY_URL": "Vanity URL",
             };
             
-            const verificationMap: Record<number, string> = {
+            const verificationMap = {
                 0: "None", 1: "Low", 2: "Medium", 3: "High", 4: "Highest"
             };
             
-            const nsfwLevelMap: Record<number, string> = {
+            const nsfwLevelMap = {
                 0: "Default", 1: "Explicit", 2: "Safe", 3: "Age Restricted"
             };
             
             const features = (guild.features || [])
-                .map((f: string) => featureMap[f] || f)
+                .map(f => featureMap[f] || f)
                 .sort()
                 .slice(0, 11);
             
@@ -423,7 +423,7 @@ const inviteInfoCommand = common.cmdDisplays({
 });
 
 const commands = [userInfoCommand, serverInfoCommand, inviteInfoCommand];
-const patches: Array<() => void> = [];
+const patches = [];
 
 export default {
     meta: vendetta.plugin,
