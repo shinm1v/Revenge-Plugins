@@ -1,13 +1,6 @@
-import { findByStoreName, findByProps } from "@vendetta/metro";
-import { semanticColors } from "@vendetta/ui";
+import { findByProps } from "@vendetta/metro";
 
-const ThemeStore = findByStoreName("ThemeStore");
-const { meta: { resolveSemanticColor } } = findByProps("colors", "meta");
 const API = findByProps("get", "post");
-
-export function getEmbedColor(): number {
-    return parseInt(resolveSemanticColor(ThemeStore.theme, semanticColors.BACKGROUND_BASE_LOWER).slice(1), 16);
-}
 
 export function formatTimestamp(timestamp: number): string {
     if (!timestamp) return "Unknown";
@@ -51,17 +44,7 @@ export function getGuildIconUrl(guildId: string, iconHash: string): string {
     return `https://cdn.discordapp.com/icons/${guildId}/${iconHash}.png?size=256`;
 }
 
-export function getStatusText(status: string): string {
-    switch(status) {
-        case "online": return "Online";
-        case "idle": return "Idle";
-        case "dnd": return "Do Not Disturb";
-        default: return "Offline";
-    }
-}
-
 export async function fetchUser(userId: string) {
-    const API = findByProps("get", "post");
     try {
         const response = await API.get({ url: `/users/${userId}` });
         return response.body;
@@ -72,7 +55,6 @@ export async function fetchUser(userId: string) {
 }
 
 export async function fetchGuild(guildId: string) {
-    const API = findByProps("get", "post");
     try {
         const response = await API.get({ url: `/guilds/${guildId}` });
         return response.body;
@@ -83,59 +65,11 @@ export async function fetchGuild(guildId: string) {
 }
 
 export async function fetchInvite(inviteCode: string) {
-    const API = findByProps("get", "post");
     try {
         const response = await API.get({ url: `/invites/${inviteCode}` });
         return response.body;
     } catch (e) {
         console.error("[API] Failed to fetch invite:", e);
-        return null;
-    }
-}
-
-export function createSafeEmbed(options: {
-    color?: number;
-    title?: string;
-    description?: string;
-    author?: { name: string; icon_url?: string };
-    thumbnail?: { url: string };
-    image?: { url: string };
-    fields?: Array<{ name: string; value: string; inline?: boolean }>;
-    footer?: { text: string; icon_url?: string };
-}): any {
-    const embed: any = {};
-    
-    if (options.color !== undefined) embed.color = options.color;
-    if (options.title) embed.title = options.title;
-    if (options.description) embed.description = options.description;
-    if (options.author) embed.author = options.author;
-    if (options.fields?.length) embed.fields = options.fields;
-    if (options.footer) embed.footer = options.footer;
-    
-    if (options.thumbnail?.url) {
-        embed.thumbnail = { url: options.thumbnail.url };
-    }
-    
-    if (options.image?.url) {
-        embed.image = { url: options.image.url };
-    }
-    
-    return embed;
-}
-
-export function sendEmbed(channelId: string, embed: any, isEphemeral: boolean = false) {
-    const { sendBotMessage } = findByProps("sendBotMessage", "sendMessage", "receiveMessage");
-    
-    if (isEphemeral) {
-        return {
-            type: 4,
-            data: {
-                embeds: [embed],
-                flags: 64
-            }
-        };
-    } else {
-        sendBotMessage(channelId, { embeds: [embed] });
         return null;
     }
 }
