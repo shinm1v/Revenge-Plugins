@@ -28,11 +28,10 @@ function extractAllMentionIds(message: any): string[] {
 
     if (message.embeds && Array.isArray(message.embeds)) {
         for (const embed of message.embeds) {
-            if (embed.rawTitle) {
-                ids.push(...extractIdsFromText(embed.rawTitle));
-            }
-            if (embed.rawDescription) {
-                ids.push(...extractIdsFromText(embed.rawDescription));
+            for (const key of Object.keys(embed)) {
+                if (typeof embed[key] === "string") {
+                    ids.push(...extractIdsFromText(embed[key]));
+                }
             }
             if (embed.fields && Array.isArray(embed.fields)) {
                 for (const field of embed.fields) {
@@ -61,8 +60,13 @@ async function forceUIRefresh(channelId: string, messageId: string, originalMess
     if (originalMessage.embeds && Array.isArray(originalMessage.embeds)) {
         freshEmbeds = originalMessage.embeds.map((embed: any) => {
             const cloned = { ...embed };
-            if (cloned.rawTitle) cloned.rawTitle = cloned.rawTitle + " ";
-            if (cloned.rawDescription) cloned.rawDescription = cloned.rawDescription + " ";
+            
+            for (const key of Object.keys(cloned)) {
+                if (typeof cloned[key] === "string" && cloned[key].length > 0) {
+                    cloned[key] = cloned[key] + " ";
+                }
+            }
+            
             if (cloned.fields && Array.isArray(cloned.fields)) {
                 cloned.fields = cloned.fields.map((f: any) => ({
                     ...f,
@@ -84,7 +88,7 @@ async function forceUIRefresh(channelId: string, messageId: string, originalMess
         }
     });
 
-    await sleep(50);
+    await sleep(60);
 
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
@@ -212,7 +216,7 @@ export default {
 
                     const groups: any[] = findInReactTree(
                         component,
-                        (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
+                        (c: any) => Array.isArray(c) && c?.type?.name === "ActionSheetRowGroup"
                     );
 
                     if (!groups?.length) {
