@@ -85,27 +85,28 @@ export function getGuildDiscoverySplashUrl(guildId, discoverySplashHash) {
 }
 
 export function decodeBadges(flags) {
-    const badges = {
-        1 << 0: "Staff",
-        1 << 1: "Partner",
-        1 << 2: "Hypesquad",
-        1 << 3: "Bug Hunter Level 1",
-        1 << 6: "Hypesquad Bravery",
-        1 << 7: "Hypesquad Brilliance",
-        1 << 8: "Hypesquad Balance",
-        1 << 9: "Early Supporter",
-        1 << 10: "Team User",
-        1 << 11: "Bug Hunter Level 2",
-        1 << 12: "Verified Bot",
-        1 << 13: "Early Verified Bot Developer",
-        1 << 14: "Discord Certified Moderator",
-        1 << 16: "Active Developer"
-    };
+    const badgeMap = [
+        { bit: 1 << 0, name: "Staff" },
+        { bit: 1 << 1, name: "Partner" },
+        { bit: 1 << 2, name: "Hypesquad" },
+        { bit: 1 << 3, name: "Bug Hunter Level 1" },
+        { bit: 1 << 6, name: "Hypesquad Bravery" },
+        { bit: 1 << 7, name: "Hypesquad Brilliance" },
+        { bit: 1 << 8, name: "Hypesquad Balance" },
+        { bit: 1 << 9, name: "Early Supporter" },
+        { bit: 1 << 10, name: "Team User" },
+        { bit: 1 << 11, name: "Bug Hunter Level 2" },
+        { bit: 1 << 12, name: "Verified Bot" },
+        { bit: 1 << 13, name: "Early Verified Bot Developer" },
+        { bit: 1 << 14, name: "Discord Certified Moderator" },
+        { bit: 1 << 16, name: "Active Developer" },
+        { bit: 1 << 18, name: "BOT_HTTP_INTERACTIONS" }
+    ];
     
     const userBadges = [];
-    for (const [bit, badge] of Object.entries(badges)) {
-        if (flags & parseInt(bit)) {
-            userBadges.push(badge);
+    for (const badge of badgeMap) {
+        if (flags & badge.bit) {
+            userBadges.push(badge.name);
         }
     }
     return userBadges.length > 0 ? userBadges.join(", ") : "None";
