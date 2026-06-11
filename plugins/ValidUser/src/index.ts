@@ -28,11 +28,12 @@ function extractAllMentionIds(message: any): string[] {
 
     if (message.embeds && Array.isArray(message.embeds)) {
         for (const embed of message.embeds) {
-            if (embed.title) ids.push(...extractIdsFromText(embed.title));
-            if (embed.rawTitle) ids.push(...extractIdsFromText(embed.rawTitle));
-            if (embed.description) ids.push(...extractIdsFromText(embed.description));
-            if (embed.rawDescription) ids.push(...extractIdsFromText(embed.rawDescription));
-            
+            if (embed.rawTitle) {
+                ids.push(...extractIdsFromText(embed.rawTitle));
+            }
+            if (embed.rawDescription) {
+                ids.push(...extractIdsFromText(embed.rawDescription));
+            }
             if (embed.fields && Array.isArray(embed.fields)) {
                 for (const field of embed.fields) {
                     if (field.name) ids.push(...extractIdsFromText(field.name));
@@ -51,57 +52,29 @@ function isUserCached(userId: string): boolean {
     return !!user;
 }
 
-async function forceUIRefresh(channelId: string, messageId: string, originalMessage: any) {
+async function forceUIRefresh(channelId: string, messageId: string, content: string) {
     const Dispatcher = findByProps("dispatch", "subscribe");
-    
-    logger.log("[ValidUser] Forcing UI refresh...");
-    
-    const freshContent = (originalMessage.content || "") + " ";
-    let freshEmbeds = [];
-
-    if (originalMessage.embeds && Array.isArray(originalMessage.embeds)) {
-        freshEmbeds = originalMessage.embeds.map((embed: any) => {
-            const cloned = { ...embed };
-            
-            if (cloned.title) cloned.title = cloned.title + " ";
-            if (cloned.rawTitle) cloned.rawTitle = cloned.rawTitle + " ";
-            if (cloned.description) cloned.description = cloned.description + " ";
-            if (cloned.rawDescription) cloned.rawDescription = cloned.rawDescription + " ";
-            
-            if (cloned.fields && Array.isArray(cloned.fields)) {
-                cloned.fields = cloned.fields.map((f: any) => ({
-                    ...f,
-                    name: f.name ? f.name + " " : f.name,
-                    value: f.value ? f.value + " " : f.value
-                }));
-            }
-            return cloned;
-        });
-    }
+    const freshContent = content + " ";
 
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
             id: messageId,
             channel_id: channelId,
-            content: freshContent,
-            embeds: freshEmbeds
+            content: freshContent 
         }
     });
 
-    await sleep(60);
+    await sleep(50);
 
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
             id: messageId,
             channel_id: channelId,
-            content: originalMessage.content || "",
-            embeds: originalMessage.embeds || []
+            content: content 
         }
     });
-    
-    logger.log("[ValidUser] UI refresh complete");
 }
 
 async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
@@ -114,8 +87,6 @@ async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
     const ws = GatewayConnection?.getGateway?.();
     if (!ws) return false;
 
-    logger.log(`[ValidUser] Sending gateway request for ${userIds.length} users`);
-    
     ws.send(8, {
         guild_id: currentGuildId,
         user_ids: userIds,
@@ -151,8 +122,6 @@ async function fixUnknownMentions(message: any) {
     const channelId = message.channel_id;
     const messageId = message.id;
 
-    logger.log(`[ValidUser] Found ${ids.length} mention(s) in message`);
-
     if (ids.length === 0) return;
 
     const uncachedIds: string[] = [];
@@ -162,12 +131,9 @@ async function fixUnknownMentions(message: any) {
         }
     }
 
-    logger.log(`[ValidUser] ${uncachedIds.length} user(s) not cached`);
-
     if (uncachedIds.length === 0) {
-        logger.log("[ValidUser] All users cached, refreshing UI");
         if (channelId && messageId) {
-            await forceUIRefresh(channelId, messageId, message);
+            await forceUIRefresh(channelId, messageId, message.content);
         }
         return;
     }
@@ -181,27 +147,21 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (!success) {
-        logger.log(`[ValidUser] Fetching ${uncachedIds.length} users via API`);
-        
         const API = findByProps("get", "post");
         const Dispatcher = findByProps("dispatch", "subscribe");
         const TokenStore = findByProps("getToken");
         const token = TokenStore?.getToken();
 
-        if (!token) {
-            logger.error("[ValidUser] No token available");
-            return;
-        }
+        if (!token) return;
 
         const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
 
         for (let i = 0; i < uncachedIds.length; i++) {
             const userId = uncachedIds[i];
             try {
-                const username = await fetchUsersViaAPI(userId, token, API, Dispatcher);
-                logger.log(`[ValidUser] Cached: ${username} [${i+1}/${uncachedIds.length}]`);
+                await fetchUsersViaAPI(userId, token, API, Dispatcher);
             } catch (err) {
-                logger.error(`[ValidUser] Failed for ${userId}:`, err);
+                logger.error(`[ValidUser] Fetch Failed for ${userId}:`, err);
             }
             if (i < uncachedIds.length - 1) {
                 await sleep(safetyDelay);
@@ -210,7 +170,7 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (channelId && messageId) {
-        await forceUIRefresh(channelId, messageId, message);
+        await forceUIRefresh(channelId, messageId, message.content);
     }
 }
 
@@ -218,15 +178,11 @@ let unpatchOpenLazy: (() => void) | null = null;
 
 export default {
     onLoad() {
-        logger.log("[ValidUser] Plugin loaded - button will appear on messages with mentions");
-        
         unpatchOpenLazy = before("openLazy", ActionSheet, ([comp, args, msg]) => {
             if (args !== "MessageLongPressActionSheet" || !msg?.message) return;
 
             const message = msg.message;
             const ids = extractAllMentionIds(message);
-
-            logger.log(`[ValidUser] ActionSheet opened, found ${ids.length} mention(s)`);
 
             if (ids.length === 0) return;
 
@@ -234,19 +190,14 @@ export default {
                 const unpatch = after("default", instance, (_: any, component: any) => {
                     React.useEffect(() => () => { unpatch(); }, []);
 
-                    logger.log("[ValidUser] Attempting to insert button...");
-
                     const groups: any[] = findInReactTree(
                         component,
-                        (c: any) => Array.isArray(c) && c.length > 0 && c[0]?.type?.name === "ActionSheetRowGroup"
+                        (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
                     );
 
-                    if (!groups || groups.length === 0) {
-                        logger.warn("[ValidUser] No ActionSheetRowGroup found");
+                    if (!groups?.length) {
                         return;
                     }
-
-                    logger.log(`[ValidUser] Found ${groups.length} ActionSheetRowGroup(s)`);
 
                     const fixButton = React.createElement(ActionSheetRow, {
                         label: ids.length === 1 ? "Fix Unknown Mention" : `Fix ${ids.length} Unknown Mentions`,
@@ -269,20 +220,16 @@ export default {
                         );
                         if (!groupChildren) continue;
 
-                        logger.log(`[ValidUser] Inserting button into group ${gi}`);
                         groupChildren.unshift(fixButton);
                         inserted = true;
                         break;
                     }
 
                     if (!inserted) {
-                        logger.warn("[ValidUser] Could not find group children, adding as new group");
                         groups.unshift(
                             React.createElement(ActionSheetRow.Group, null, fixButton)
                         );
                     }
-
-                    logger.log("[ValidUser] Button inserted successfully");
                 });
             });
         });
@@ -291,6 +238,5 @@ export default {
     onUnload() {
         unpatchOpenLazy?.();
         unpatchOpenLazy = null;
-        logger.log("[ValidUser] Plugin unloaded");
     },
 };
