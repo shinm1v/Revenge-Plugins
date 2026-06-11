@@ -2,8 +2,6 @@ import * as common from "../../common";
 import { semanticColors } from "@vendetta/ui";
 import { registerCommand } from "@vendetta/commands";
 import { findByStoreName, findByProps } from "@vendetta/metro";
-import { showToast } from "@vendetta/ui/toasts";
-import { getAssetIDByName } from "@vendetta/ui/assets";
 import { fetchUser, fetchGuild, fetchInvite, formatTimestamp, formatAvatarLinks, maskUrl, getGuildIconUrl, formatDate } from "./utils/embeds";
 
 const ThemeStore = findByStoreName("ThemeStore");
@@ -57,7 +55,6 @@ const userInfoCommand = common.cmdDisplays({
                 if (isEphemeral) {
                     return { type: 4, data: { content: "Please provide a user ID.", flags: 64 } };
                 }
-                showToast("Please provide a user ID!", getAssetIDByName("Small"));
                 return;
             }
             
@@ -68,7 +65,6 @@ const userInfoCommand = common.cmdDisplays({
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
                 }
-                showToast(errorMsg, getAssetIDByName("Small"));
                 return;
             }
             
@@ -173,7 +169,6 @@ const serverInfoCommand = common.cmdDisplays({
                 if (isEphemeral) {
                     return { type: 4, data: { content: "Please provide a server ID.", flags: 64 } };
                 }
-                showToast("Please provide a server ID!", getAssetIDByName("Small"));
                 return;
             }
             
@@ -184,7 +179,6 @@ const serverInfoCommand = common.cmdDisplays({
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
                 }
-                showToast(errorMsg, getAssetIDByName("Small"));
                 return;
             }
             
@@ -307,17 +301,16 @@ const inviteInfoCommand = common.cmdDisplays({
                 if (isEphemeral) {
                     return { type: 4, data: { content: "Please provide an invite code or URL.", flags: 64 } };
                 }
-                showToast("Please provide an invite code or URL!", getAssetIDByName("Small"));
                 return;
             }
             
-            function extractInviteCode(input: string): string {
+            const extractInviteCode = (input: string): string => {
                 const urlMatch = input.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
                 if (urlMatch) return urlMatch[1];
                 const codeMatch = input.match(/^([a-zA-Z0-9_-]+)/);
                 if (codeMatch) return codeMatch[1];
                 return input;
-            }
+            };
             
             const inviteCode = extractInviteCode(inviteInput);
             const invite = await fetchInvite(inviteCode);
@@ -327,7 +320,6 @@ const inviteInfoCommand = common.cmdDisplays({
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
                 }
-                showToast(errorMsg, getAssetIDByName("Small"));
                 return;
             }
             
@@ -442,7 +434,7 @@ export default {
                 patches.push(registerCommand(command));
                 console.log(`[InfoCommands] Registered: ${command.name}`);
             } catch (e) {
-                console.error(`[InfoCommands] Failed to register ${command.name}:`, e);
+                console.error(`[InfoCommands] Failed:`, e);
             }
         }
     },
