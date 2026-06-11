@@ -28,11 +28,11 @@ function extractAllMentionIds(message: any): string[] {
 
     if (message.embeds && Array.isArray(message.embeds)) {
         for (const embed of message.embeds) {
-            for (const key of Object.keys(embed)) {
-                if (typeof embed[key] === "string") {
-                    ids.push(...extractIdsFromText(embed[key]));
-                }
-            }
+            if (embed.title) ids.push(...extractIdsFromText(embed.title));
+            if (embed.rawTitle) ids.push(...extractIdsFromText(embed.rawTitle));
+            if (embed.description) ids.push(...extractIdsFromText(embed.description));
+            if (embed.rawDescription) ids.push(...extractIdsFromText(embed.rawDescription));
+            
             if (embed.fields && Array.isArray(embed.fields)) {
                 for (const field of embed.fields) {
                     if (field.name) ids.push(...extractIdsFromText(field.name));
@@ -63,11 +63,10 @@ async function forceUIRefresh(channelId: string, messageId: string, originalMess
         freshEmbeds = originalMessage.embeds.map((embed: any) => {
             const cloned = { ...embed };
             
-            for (const key of Object.keys(cloned)) {
-                if (typeof cloned[key] === "string" && cloned[key].length > 0) {
-                    cloned[key] = cloned[key] + " ";
-                }
-            }
+            if (cloned.title) cloned.title = cloned.title + " ";
+            if (cloned.rawTitle) cloned.rawTitle = cloned.rawTitle + " ";
+            if (cloned.description) cloned.description = cloned.description + " ";
+            if (cloned.rawDescription) cloned.rawDescription = cloned.rawDescription + " ";
             
             if (cloned.fields && Array.isArray(cloned.fields)) {
                 cloned.fields = cloned.fields.map((f: any) => ({
@@ -282,7 +281,7 @@ export default {
                             React.createElement(ActionSheetRow.Group, null, fixButton)
                         );
                     }
-                    
+
                     logger.log("[ValidUser] Button inserted successfully");
                 });
             });
