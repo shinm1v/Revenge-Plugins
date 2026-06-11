@@ -2,22 +2,22 @@ import { findByProps } from "@vendetta/metro";
 
 const API = findByProps("get", "post");
 
-export function formatTimestamp(timestamp: number): string {
+export function formatTimestamp(timestamp) {
     if (!timestamp) return "Unknown";
     return `<t:${Math.floor(timestamp / 1000)}:R>`;
 }
 
-export function formatDate(timestamp: number): string {
+export function formatDate(timestamp) {
     if (!timestamp) return "Unknown";
     const date = new Date(timestamp);
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export function maskUrl(text: string, url: string): string {
+export function maskUrl(text, url) {
     return `[${text}](${url})`;
 }
 
-export function getAvatarUrls(userId: string, avatarHash: string): { png: string; jpg: string; webp: string; gif?: string } {
+export function getAvatarUrls(userId, avatarHash) {
     const baseUrl = `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}`;
     const isGif = avatarHash?.startsWith("a_");
     
@@ -29,7 +29,7 @@ export function getAvatarUrls(userId: string, avatarHash: string): { png: string
     };
 }
 
-export function formatAvatarLinks(avatarHash: string, userId: string): string {
+export function formatAvatarLinks(avatarHash, userId) {
     if (!avatarHash) return "None";
     const urls = getAvatarUrls(userId, avatarHash);
     const links = [];
@@ -40,11 +40,11 @@ export function formatAvatarLinks(avatarHash: string, userId: string): string {
     return links.join(" | ");
 }
 
-export function getGuildIconUrl(guildId: string, iconHash: string): string {
+export function getGuildIconUrl(guildId, iconHash) {
     return `https://cdn.discordapp.com/icons/${guildId}/${iconHash}.png?size=256`;
 }
 
-export async function fetchUser(userId: string) {
+export async function fetchUser(userId) {
     try {
         const response = await API.get({ url: `/users/${userId}` });
         return response.body;
@@ -54,7 +54,7 @@ export async function fetchUser(userId: string) {
     }
 }
 
-export async function fetchGuild(guildId: string) {
+export async function fetchGuild(guildId) {
     try {
         const response = await API.get({ url: `/guilds/${guildId}` });
         return response.body;
@@ -64,7 +64,7 @@ export async function fetchGuild(guildId: string) {
     }
 }
 
-export async function fetchInvite(inviteCode: string) {
+export async function fetchInvite(inviteCode) {
     try {
         const response = await API.get({ url: `/invites/${inviteCode}` });
         return response.body;
