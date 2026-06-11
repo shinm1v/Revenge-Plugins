@@ -2,7 +2,7 @@ import * as common from "../../common";
 import { semanticColors } from "@vendetta/ui";
 import { registerCommand } from "@vendetta/commands";
 import { findByStoreName, findByProps } from "@vendetta/metro";
-import { fetchUser, fetchGuild, fetchInvite, formatTimestamp, formatAvatarLinks, maskUrl, getGuildIconUrl, formatDate } from "./utils/embeds.js";
+import { fetchUser, fetchGuild, fetchInvite, formatTimestamp, formatAvatarLinks, maskUrl, getGuildIconUrl } from "./utils/embeds.js";
 
 const ThemeStore = findByStoreName("ThemeStore");
 const { meta: { resolveSemanticColor } } = findByProps("colors", "meta");
@@ -49,7 +49,7 @@ const userInfoCommand = common.cmdDisplays({
     execute: async (args, ctx) => {
         try {
             const userId = args.find(a => a.name === "user_id")?.value;
-            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || false;
+            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || true;
             
             if (!userId) {
                 if (isEphemeral) {
@@ -74,39 +74,22 @@ const userInfoCommand = common.cmdDisplays({
             
             const avatarLinks = user.avatar ? formatAvatarLinks(user.avatar, user.id) : "None";
             
-            let decorationLinks = "None";
-            let skuInfo = null;
-            if (user.avatar_decoration) {
-                const decoUrl = `https://cdn.discordapp.com/avatar-decoration-presets/${user.avatar_decoration}.png?size=256`;
-                decorationLinks = `${maskUrl("PNG", decoUrl)} | ${maskUrl("JPG", decoUrl)} | ${maskUrl("WebP", decoUrl)}`;
-                skuInfo = user.avatar_decoration;
-            }
-            
-            const fields = [
-                { name: "Username", value: user.username, inline: true },
-                { name: "Display Name", value: user.global_name || user.username, inline: true },
-                { name: "Mention", value: `<@${user.id}>`, inline: true },
-                { name: "Created", value: formatTimestamp(Date.parse(user.created_at)), inline: true },
-                { name: "Avatar", value: avatarLinks, inline: true }
-            ];
-            
-            if (user.avatar_decoration) {
-                fields.push(
-                    { name: "Avatar Decoration", value: decorationLinks, inline: true },
-                    { name: "SKU", value: skuInfo, inline: false }
-                );
-            }
-            
-            fields.push(
-                { name: "Bot", value: user.bot ? "Yes" : "No", inline: true },
-                { name: "ID", value: user.id, inline: false }
-            );
+            // Cleaner embed - fewer fields, better layout
+            const description = [
+                `**Display Name:** ${user.global_name || user.username}`,
+                `**Mention:** <@${user.id}>`,
+                `**Created:** ${formatTimestamp(Date.parse(user.created_at)) || "Unknown"}`,
+                `**Bot:** ${user.bot ? "Yes" : "No"}`,
+                `**Avatar:** ${avatarLinks}`,
+                user.avatar_decoration ? `**Avatar Decoration:** ${user.avatar_decoration}` : null,
+                `\n**ID:** \`${user.id}\``
+            ].filter(Boolean).join("\n");
             
             const embed = {
                 color: EMBED_COLOR(),
                 type: "rich",
                 author: { name: user.username, icon_url: avatarUrl },
-                fields: fields
+                description: description
             };
             
             if (isEphemeral) {
@@ -139,19 +122,19 @@ const userInfoCommand = common.cmdDisplays({
     }
 });
 
-// Server Info Command
+// Server Info Command (using invite endpoint which has counts)
 const serverInfoCommand = common.cmdDisplays({
     type: 1,
     inputType: 1,
     applicationId: "-1",
     name: "serverinfo",
-    description: "Get information about a server by ID",
+    description: "Get information about a server by invite code",
     options: [
         {
             required: true,
             type: 3,
-            name: "server_id",
-            description: "ID of the server",
+            name: "invite",
+            description: "Invite code or vanity URL (e.g., bloxfruit)",
         },
         {
             required: false,
@@ -162,83 +145,87 @@ const serverInfoCommand = common.cmdDisplays({
     ],
     execute: async (args, ctx) => {
         try {
-            const guildId = args.find(a => a.name === "server_id")?.value;
-            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || false;
+            let inviteInput = args.find(a => a.name === "invite")?.value;
+            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || true;
             
-            if (!guildId) {
+            if (!inviteInput) {
                 if (isEphemeral) {
-                    return { type: 4, data: { content: "Please provide a server ID.", flags: 64 } };
+                    return { type: 4, data: { content: "Please provide an invite code.", flags: 64 } };
                 }
                 return;
             }
             
-            const guild = await fetchGuild(guildId);
+            // Extract code from URL if needed
+            const urlMatch = inviteInput.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
+            if (urlMatch) inviteInput = urlMatch[1];
             
-            if (!guild) {
-                const errorMsg = `Server not found: ${guildId}`;
+            const invite = await fetchInvite(inviteInput);
+            
+            if (!invite || !invite.guild) {
+                const errorMsg = `Invalid invite: ${inviteInput}`;
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
                 }
                 return;
             }
             
+            const guild = invite.guild;
+            const memberCount = invite.approximate_member_count || 0;
+            const onlineCount = invite.approximate_presence_count || 0;
+            
+            // Clean feature names
             const featureMap = {
                 "ANIMATED_ICON": "Animated Icon",
+                "ANIMATED_BANNER": "Animated Banner",
                 "BANNER": "Banner",
                 "COMMUNITY": "Community",
-                "DISCOVERABLE": "Discoverable",
                 "INVITE_SPLASH": "Invite Splash",
                 "MEMBER_VERIFICATION_GATE_ENABLED": "Member Verification",
                 "NEWS": "News Channels",
                 "SOUNDBOARD": "Soundboard",
                 "VANITY_URL": "Vanity URL",
+                "AUTO_MODERATION": "Auto Moderation",
+                "AGE_VERIFICATION_LARGE_GUILD": "Age Verification"
             };
             
-            const verificationMap = {
-                0: "None", 1: "Low", 2: "Medium", 3: "High", 4: "Highest"
-            };
-            
-            const nsfwLevelMap = {
-                0: "Default", 1: "Explicit", 2: "Safe", 3: "Age Restricted"
-            };
+            const verificationMap = { 0: "None", 1: "Low", 2: "Medium", 3: "High", 4: "Highest" };
+            const nsfwLevelMap = { 0: "Default", 1: "Explicit", 2: "Safe", 3: "Age Restricted" };
             
             const features = (guild.features || [])
-                .map(f => featureMap[f] || f)
+                .map(f => featureMap[f] || f.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, l => l.toUpperCase()))
                 .sort()
-                .slice(0, 10);
+                .slice(0, 15)
+                .join("\n");
             
-            const iconUrl = guild.icon ? getGuildIconUrl(guild.id, guild.icon) : null;
+            const iconUrl = guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=256` : null;
+            const createdAt = guild.created_at ? formatTimestamp(Date.parse(guild.created_at)) : "Unknown";
             
-            const fields = [
-                {
-                    name: "Details",
-                    value: `Created: ${formatTimestamp(Date.parse(guild.created_at))}\nBoost: Level ${guild.premium_tier || 0} (${guild.premium_subscription_count || 0} boosts)\nVerification: ${verificationMap[guild.verification_level || 0]}\nNSFW: ${nsfwLevelMap[guild.nsfw_level || 0]}`,
-                    inline: false
-                },
-                {
-                    name: `Features (${features.length})`,
-                    value: features.length > 0 ? features.join('\n') : "None",
-                    inline: false
-                }
-            ];
-            
-            if (guild.vanity_url_code) {
-                fields.push({
-                    name: "Vanity URL",
-                    value: maskUrl(`discord.gg/${guild.vanity_url_code}`, `https://discord.gg/${guild.vanity_url_code}`),
-                    inline: true
-                });
-            }
-            
-            fields.push({ name: "ID", value: guild.id, inline: false });
+            const description = [
+                guild.description || "",
+                "",
+                "**Members**",
+                `${memberCount.toLocaleString()} total • ${onlineCount.toLocaleString()} online`,
+                "",
+                "**Details**",
+                `Created: ${createdAt}`,
+                `Boost: Level ${guild.premium_tier || 0} (${guild.premium_subscription_count || 0} boosts)`,
+                `Verification: ${verificationMap[guild.verification_level || 0]}`,
+                `NSFW Level: ${nsfwLevelMap[guild.nsfw_level || 0]}`,
+                "",
+                `**Features (${guild.features?.length || 0})**`,
+                features || "None",
+                "",
+                guild.vanity_url_code ? `**Vanity URL**\ndiscord.gg/${guild.vanity_url_code}` : null,
+                "",
+                `**ID**\n${guild.id}`
+            ].filter(Boolean).join("\n");
             
             const embed = {
                 color: EMBED_COLOR(),
                 type: "rich",
                 title: guild.name,
-                description: guild.description || "No description.",
-                thumbnail: iconUrl ? { url: iconUrl } : undefined,
-                fields: fields
+                description: description,
+                thumbnail: iconUrl ? { url: iconUrl } : undefined
             };
             
             if (isEphemeral) {
@@ -277,13 +264,13 @@ const inviteInfoCommand = common.cmdDisplays({
     inputType: 1,
     applicationId: "-1",
     name: "inviteinfo",
-    description: "Get server information from an invite code or vanity URL",
+    description: "Get detailed invite information",
     options: [
         {
             required: true,
             type: 3,
             name: "invite",
-            description: "Invite code or URL (e.g., discord.gg/example)",
+            description: "Invite code or URL",
         },
         {
             required: false,
@@ -294,29 +281,23 @@ const inviteInfoCommand = common.cmdDisplays({
     ],
     execute: async (args, ctx) => {
         try {
-            const inviteInput = args.find(a => a.name === "invite")?.value;
-            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || false;
+            let inviteInput = args.find(a => a.name === "invite")?.value;
+            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || true;
             
             if (!inviteInput) {
                 if (isEphemeral) {
-                    return { type: 4, data: { content: "Please provide an invite code or URL.", flags: 64 } };
+                    return { type: 4, data: { content: "Please provide an invite code.", flags: 64 } };
                 }
                 return;
             }
             
-            const extractInviteCode = (input) => {
-                const urlMatch = input.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
-                if (urlMatch) return urlMatch[1];
-                const codeMatch = input.match(/^([a-zA-Z0-9_-]+)/);
-                if (codeMatch) return codeMatch[1];
-                return input;
-            };
+            const urlMatch = inviteInput.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
+            if (urlMatch) inviteInput = urlMatch[1];
             
-            const inviteCode = extractInviteCode(inviteInput);
-            const invite = await fetchInvite(inviteCode);
+            const invite = await fetchInvite(inviteInput);
             
             if (!invite || !invite.guild) {
-                const errorMsg = `Invalid or expired invite: ${inviteCode}`;
+                const errorMsg = `Invalid invite: ${inviteInput}`;
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
                 }
@@ -326,70 +307,37 @@ const inviteInfoCommand = common.cmdDisplays({
             const guild = invite.guild;
             const memberCount = invite.approximate_member_count || 0;
             const onlineCount = invite.approximate_presence_count || 0;
+            const createdAt = guild.created_at ? formatTimestamp(Date.parse(guild.created_at)) : "Unknown";
+            const expiresText = invite.expires_at ? new Date(invite.expires_at).toLocaleDateString() : "Never";
             
-            const featureMap = {
-                "ANIMATED_ICON": "Animated Icon",
-                "COMMUNITY": "Community",
-                "INVITE_SPLASH": "Invite Splash",
-                "MEMBER_VERIFICATION_GATE_ENABLED": "Member Verification",
-                "NEWS": "News Channels",
-                "SOUNDBOARD": "Soundboard",
-                "VANITY_URL": "Vanity URL",
-            };
+            const description = [
+                guild.description || "",
+                "",
+                "**Members**",
+                `${memberCount.toLocaleString()} total • ${onlineCount.toLocaleString()} online • ${(memberCount - onlineCount).toLocaleString()} offline`,
+                "",
+                "**Server Details**",
+                `Created: ${createdAt}`,
+                `Boost: Level ${guild.premium_tier || 0} (${guild.premium_subscription_count || 0} boosts)`,
+                "",
+                "**Invite Details**",
+                `Code: \`${invite.code}\``,
+                `Channel: ${invite.channel?.name || "Unknown"}`,
+                `Inviter: ${invite.inviter?.username || "Vanity URL"}`,
+                `Expires: ${expiresText}`,
+                `Max Uses: ${invite.max_uses || "Unlimited"}`,
+                "",
+                `**Server ID**\n${guild.id}`
+            ].filter(Boolean).join("\n");
             
-            const verificationMap = {
-                0: "None", 1: "Low", 2: "Medium", 3: "High", 4: "Highest"
-            };
-            
-            const nsfwLevelMap = {
-                0: "Default", 1: "Explicit", 2: "Safe", 3: "Age Restricted"
-            };
-            
-            const features = (guild.features || [])
-                .map(f => featureMap[f] || f)
-                .sort()
-                .slice(0, 11);
-            
-            const iconUrl = guild.icon ? getGuildIconUrl(guild.id, guild.icon) : null;
-            const expiresText = invite.expires_at ? formatDate(Date.parse(invite.expires_at)) : "Never";
-            
-            const fields = [
-                {
-                    name: "Members",
-                    value: `${memberCount} total\n${onlineCount} online\n${memberCount - onlineCount} offline`,
-                    inline: true
-                },
-                {
-                    name: "Details",
-                    value: `Created: ${formatTimestamp(Date.parse(guild.created_at))}\nBoost: Level ${guild.premium_tier || 0} (${guild.premium_subscription_count || 0} boosts)\nVerification: ${verificationMap[guild.verification_level || 0]}\nNSFW: ${nsfwLevelMap[guild.nsfw_level || 0]}`,
-                    inline: false
-                }
-            ];
-            
-            if (features.length > 0) {
-                fields.push({
-                    name: `Features (${features.length})`,
-                    value: features.join('\n'),
-                    inline: false
-                });
-            }
-            
-            fields.push(
-                {
-                    name: "Invite Info",
-                    value: `Code: \`${invite.code}\`\nChannel: #${invite.channel?.name || "unknown"}\nInviter: ${invite.inviter?.username || "Vanity URL"}\nExpires: ${expiresText}\nMax Uses: ${invite.max_uses || "Unlimited"}`,
-                    inline: false
-                },
-                { name: "ID", value: guild.id, inline: true }
-            );
+            const iconUrl = guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=256` : null;
             
             const embed = {
                 color: EMBED_COLOR(),
                 type: "rich",
                 title: guild.name,
-                description: guild.description || "No description.",
-                thumbnail: iconUrl ? { url: iconUrl } : undefined,
-                fields: fields
+                description: description,
+                thumbnail: iconUrl ? { url: iconUrl } : undefined
             };
             
             if (isEphemeral) {
