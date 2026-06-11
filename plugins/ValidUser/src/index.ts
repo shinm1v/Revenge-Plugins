@@ -54,6 +54,8 @@ function isUserCached(userId: string): boolean {
 async function forceUIRefresh(channelId: string, messageId: string, originalMessage: any) {
     const Dispatcher = findByProps("dispatch", "subscribe");
     
+    logger.log("[ValidUser] Forcing UI refresh...");
+    
     const freshContent = (originalMessage.content || "") + " ";
     let freshEmbeds = [];
 
@@ -99,6 +101,8 @@ async function forceUIRefresh(channelId: string, messageId: string, originalMess
             embeds: originalMessage.embeds || []
         }
     });
+    
+    logger.log("[ValidUser] UI refresh complete");
 }
 
 async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
@@ -111,6 +115,8 @@ async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
     const ws = GatewayConnection?.getGateway?.();
     if (!ws) return false;
 
+    logger.log(`[ValidUser] Sending gateway request for ${userIds.length} users`);
+    
     ws.send(8, {
         guild_id: currentGuildId,
         user_ids: userIds,
@@ -146,6 +152,8 @@ async function fixUnknownMentions(message: any) {
     const channelId = message.channel_id;
     const messageId = message.id;
 
+    logger.log(`[ValidUser] Found ${ids.length} mention(s) in message`);
+
     if (ids.length === 0) return;
 
     const uncachedIds: string[] = [];
@@ -155,7 +163,10 @@ async function fixUnknownMentions(message: any) {
         }
     }
 
+    logger.log(`[ValidUser] ${uncachedIds.length} user(s) not cached`);
+
     if (uncachedIds.length === 0) {
+        logger.log("[ValidUser] All users cached, refreshing UI");
         if (channelId && messageId) {
             await forceUIRefresh(channelId, messageId, message);
         }
@@ -171,21 +182,27 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (!success) {
+        logger.log(`[ValidUser] Fetching ${uncachedIds.length} users via API`);
+        
         const API = findByProps("get", "post");
         const Dispatcher = findByProps("dispatch", "subscribe");
         const TokenStore = findByProps("getToken");
         const token = TokenStore?.getToken();
 
-        if (!token) return;
+        if (!token) {
+            logger.error("[ValidUser] No token available");
+            return;
+        }
 
         const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
 
         for (let i = 0; i < uncachedIds.length; i++) {
             const userId = uncachedIds[i];
             try {
-                await fetchUsersViaAPI(userId, token, API, Dispatcher);
+                const username = await fetchUsersViaAPI(userId, token, API, Dispatcher);
+                logger.log(`[ValidUser] Cached: ${username} [${i+1}/${uncachedIds.length}]`);
             } catch (err) {
-                logger.error(`[ValidUser] Fetch Failed for ${userId}:`, err);
+                logger.error(`[ValidUser] Failed for ${userId}:`, err);
             }
             if (i < uncachedIds.length - 1) {
                 await sleep(safetyDelay);
@@ -202,11 +219,15 @@ let unpatchOpenLazy: (() => void) | null = null;
 
 export default {
     onLoad() {
+        logger.log("[ValidUser] Plugin loaded - button will appear on messages with mentions");
+        
         unpatchOpenLazy = before("openLazy", ActionSheet, ([comp, args, msg]) => {
             if (args !== "MessageLongPressActionSheet" || !msg?.message) return;
 
             const message = msg.message;
             const ids = extractAllMentionIds(message);
+
+            logger.log(`[ValidUser] ActionSheet opened, found ${ids.length} mention(s)`);
 
             if (ids.length === 0) return;
 
@@ -214,14 +235,19 @@ export default {
                 const unpatch = after("default", instance, (_: any, component: any) => {
                     React.useEffect(() => () => { unpatch(); }, []);
 
+                    logger.log("[ValidUser] Attempting to insert button...");
+
                     const groups: any[] = findInReactTree(
                         component,
-                        (c: any) => Array.isArray(c) && c?.type?.name === "ActionSheetRowGroup"
+                        (c: any) => Array.isArray(c) && c.length > 0 && c[0]?.type?.name === "ActionSheetRowGroup"
                     );
 
-                    if (!groups?.length) {
+                    if (!groups || groups.length === 0) {
+                        logger.warn("[ValidUser] No ActionSheetRowGroup found");
                         return;
                     }
+
+                    logger.log(`[ValidUser] Found ${groups.length} ActionSheetRowGroup(s)`);
 
                     const fixButton = React.createElement(ActionSheetRow, {
                         label: ids.length === 1 ? "Fix Unknown Mention" : `Fix ${ids.length} Unknown Mentions`,
@@ -244,16 +270,20 @@ export default {
                         );
                         if (!groupChildren) continue;
 
+                        logger.log(`[ValidUser] Inserting button into group ${gi}`);
                         groupChildren.unshift(fixButton);
                         inserted = true;
                         break;
                     }
 
                     if (!inserted) {
+                        logger.warn("[ValidUser] Could not find group children, adding as new group");
                         groups.unshift(
                             React.createElement(ActionSheetRow.Group, null, fixButton)
                         );
                     }
+                    
+                    logger.log("[ValidUser] Button inserted successfully");
                 });
             });
         });
@@ -262,5 +292,6 @@ export default {
     onUnload() {
         unpatchOpenLazy?.();
         unpatchOpenLazy = null;
+        logger.log("[ValidUser] Plugin unloaded");
     },
 };
