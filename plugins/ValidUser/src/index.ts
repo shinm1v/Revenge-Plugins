@@ -231,15 +231,11 @@ export default {
                 const unpatch = after("default", instance, (_: any, component: any) => {
                     React.useEffect(() => () => { unpatch(); }, []);
 
-                    const groups: any[] = findInReactTree(
+                    // Search directly for ANY layout section containing rows to adapt to changing component naming schemes
+                    const actionSheetTree = findInReactTree(
                         component,
-                        (c: any) => Array.isArray(c) && c?.type?.name === "ActionSheetRowGroup"
+                        (c: any) => Array.isArray(c) && c.some((child: any) => child?.type?.name === "ActionSheetRow" || child?.props?.label)
                     );
-
-                    if (!groups?.length) {
-                        logger.warn("[ValidUser] Sheet tracking lost: RowGroups missing.");
-                        return;
-                    }
 
                     const fixButton = React.createElement(ActionSheetRow, {
                         label: ids.length === 1 ? "Fix Unknown Mention" : `Fix ${ids.length} Unknown Mentions`,
@@ -252,26 +248,18 @@ export default {
                         },
                     });
 
-                    let inserted = false;
-                    for (let gi = 0; gi < groups.length; gi++) {
-                        const groupChildren: any[] = findInReactTree(
-                            groups[gi],
-                            (c: any) => Array.isArray(c) && c.some((child: any) =>
-                                child?.type?.name === "ActionSheetRow"
-                            )
-                        );
-                        if (!groupChildren) continue;
-
-                        groupChildren.unshift(fixButton);
-                        inserted = true;
-                        break;
-                    }
-
-                    if (!inserted) {
-                        logger.warn("[ValidUser] Appending layout fallback group block");
-                        groups.unshift(
-                            React.createElement(ActionSheetRow.Group, null, fixButton)
-                        );
+                    if (Array.isArray(actionSheetTree)) {
+                        actionSheetTree.unshift(fixButton);
+                        logger.log("[ValidUser] Custom action item injected via child branch traversal.");
+                    } else {
+                        // Universal fallback fallback container generation
+                        const rootGroup = findInReactTree(component, (c: any) => c?.props?.children);
+                        if (rootGroup && Array.isArray(rootGroup.props.children)) {
+                            rootGroup.props.children.unshift(fixButton);
+                            logger.log("[ValidUser] Custom action item injected via root group fallback.");
+                        } else {
+                            logger.warn("[ValidUser] Failed to patch menu tree layout completely.");
+                        }
                     }
                 });
             });
