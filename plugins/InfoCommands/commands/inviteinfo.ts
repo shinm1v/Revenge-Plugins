@@ -1,9 +1,6 @@
-import { findByProps, findByStoreName } from "@vendetta/metro";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import { getEmbedColor, formatTimestamp, formatDate, maskUrl, getGuildIconUrl, sendEmbed } from "../utils/embeds";
-
-const InviteActions = findByProps("acceptInvite", "resolveInvite", "getInvite");
+import { getEmbedColor, formatTimestamp, formatDate, maskUrl, getGuildIconUrl, sendEmbed, fetchInvite } from "../utils/embeds";
 
 function extractInviteCode(input: string): string {
     const urlMatch = input.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
@@ -67,12 +64,14 @@ export const inviteInfoCommand = {
                 return null;
             }
             
-            const inviteCode = extractInviteCode(inviteInput);
+            if (!isEphemeral) {
+                showToast(`Fetching invite info...`, getAssetIDByName("DownloadIcon"));
+            }
             
-            let invite;
-            try {
-                invite = await InviteActions.resolveInvite(inviteCode);
-            } catch (e) {
+            const inviteCode = extractInviteCode(inviteInput);
+            const invite = await fetchInvite(inviteCode);
+            
+            if (!invite || !invite.guild) {
                 const errorMsg = `Invalid or expired invite: ${inviteCode}`;
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
@@ -81,19 +80,9 @@ export const inviteInfoCommand = {
                 return null;
             }
             
-            if (!invite || !invite.guild) {
-                const errorMsg = "Could not fetch invite information.";
-                if (isEphemeral) {
-                    return { type: 4, data: { content: errorMsg, flags: 64 } };
-                }
-                showToast(errorMsg, getAssetIDByName("Small"));
-                return null;
-            }
-            
             const guild = invite.guild;
-            const isVanity = guild.vanityURLCode === inviteCode;
-            const memberCount = invite.approximateMemberCount || 0;
-            const onlineCount = invite.approximatePresenceCount || 0;
+            const memberCount = invite.approximate_member_count || 0;
+            const onlineCount = invite.approximate_presence_count || 0;
             
             const features = (guild.features || [])
                 .map((f: string) => featureMap[f] || f)
@@ -101,7 +90,7 @@ export const inviteInfoCommand = {
                 .slice(0, 11);
             
             const iconUrl = guild.icon ? getGuildIconUrl(guild.id, guild.icon) : null;
-            const expiresText = invite.expiresAt ? `${formatDate(invite.expiresAt)} at ${new Date(invite.expiresAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: 'numeric', hour12: true })}` : "Never";
+            const expiresText = invite.expires_at ? formatDate(Date.parse(invite.expires_at)) : "Never";
             
             const fields = [
                 {
@@ -111,7 +100,7 @@ export const inviteInfoCommand = {
                 },
                 {
                     name: "Details",
-                    value: `Created: ${formatTimestamp(guild.createdAt)}\nBoost: Level ${guild.premiumTier || 0} (${guild.premiumSubscriptionCount || 0} boosts)\nVerification: ${verificationMap[guild.verificationLevel || 0]}\nNSFW: ${nsfwLevelMap[guild.nsfwLevel || 0]}`,
+                    value: `Created: ${formatTimestamp(Date.parse(guild.created_at))}\nBoost: Level ${guild.premium_tier || 0} (${guild.premium_subscription_count || 0} boosts)\nVerification: ${verificationMap[guild.verification_level || 0]}\nNSFW: ${nsfwLevelMap[guild.nsfw_level || 0]}`,
                     inline: false
                 }
             ];
@@ -127,19 +116,11 @@ export const inviteInfoCommand = {
             fields.push(
                 {
                     name: "Invite Info",
-                    value: `Code: \`${invite.code}\`\nChannel: #${invite.channel?.name || "unknown"}\nInviter: ${invite.inviter?.username || "Vanity URL"}\nExpires: ${expiresText}\nMax Uses: ${invite.maxUses || "Unlimited"}`,
+                    value: `Code: \`${invite.code}\`\nChannel: #${invite.channel?.name || "unknown"}\nInviter: ${invite.inviter?.username || "Vanity URL"}\nExpires: ${expiresText}\nMax Uses: ${invite.max_uses || "Unlimited"}`,
                     inline: false
                 },
                 { name: "ID", value: guild.id, inline: true }
             );
-            
-            if (isVanity) {
-                fields.push({
-                    name: "Vanity URL",
-                    value: maskUrl(`discord.gg/${inviteCode}`, `https://discord.gg/${inviteCode}`),
-                    inline: true
-                });
-            }
             
             const embed = {
                 color: getEmbedColor(),
@@ -155,10 +136,11 @@ export const inviteInfoCommand = {
         } catch (error) {
             console.error("[InviteInfo] Error:", error);
             const isEphemeral = args?.find?.((a: any) => a.name === "ephemeral")?.value || false;
+            const errorMsg = "Error fetching invite information.";
             if (isEphemeral) {
-                return { type: 4, data: { content: "Error fetching invite information.", flags: 64 } };
+                return { type: 4, data: { content: errorMsg, flags: 64 } };
             }
-            showToast("Failed to fetch invite information", getAssetIDByName("Small"));
+            showToast(errorMsg, getAssetIDByName("Small"));
             return null;
         }
     },
