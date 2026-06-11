@@ -1,3 +1,4 @@
+import * as common from "../../common";
 import { semanticColors } from "@vendetta/ui";
 import { registerCommand } from "@vendetta/commands";
 import { findByStoreName, findByProps } from "@vendetta/metro";
@@ -23,46 +24,62 @@ const { meta: { resolveSemanticColor } } = findByProps("colors", "meta");
 export const EMBED_COLOR = () =>
     parseInt(resolveSemanticColor(ThemeStore.theme, semanticColors.BACKGROUND_BASE_LOWER).slice(1), 16);
 
+const authorMods = {
+    author: {
+        username: "InfoCommands",
+        avatar: "command",
+        avatarURL: common.AVATARS.command,
+    },
+};
+
+let madeSendMessage;
+function sendMessage() {
+    if (window.sendMessage) return window.sendMessage(...arguments);
+    if (!madeSendMessage) madeSendMessage = common.mSendMessage(vendetta);
+    return madeSendMessage(...arguments);
+}
+
 // User Info Command
-const userInfoCommand = {
+const userInfoCommand = common.cmdDisplays({
+    type: 1,
+    inputType: 1,
+    applicationId: "-1",
     name: "userinfo",
-    displayName: "userinfo",
     description: "Get information about a user by ID",
-    displayDescription: "Get information about a user by ID",
     options: [
         {
-            name: "user_id",
-            displayName: "user_id",
-            description: "ID of the user",
-            displayDescription: "ID of the user",
-            type: 3,
             required: true,
+            type: 3,
+            name: "user_id",
+            description: "ID of the user",
+        },
+        {
+            required: false,
+            type: 5,
+            name: "ephemeral",
+            description: "Send as ephemeral message",
         }
     ],
     execute: async (args, ctx) => {
         try {
             const userId = args.find(a => a.name === "user_id")?.value;
+            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || false;
             
             if (!userId) {
-                return {
-                    type: 4,
-                    data: {
-                        content: "Please provide a user ID.",
-                        flags: 64
-                    }
-                };
+                if (isEphemeral) {
+                    return { type: 4, data: { content: "Please provide a user ID.", flags: 64 } };
+                }
+                return;
             }
             
             const user = await fetchUser(userId);
             
             if (!user) {
-                return {
-                    type: 4,
-                    data: {
-                        content: `User not found: ${userId}`,
-                        flags: 64
-                    }
-                };
+                const errorMsg = `User not found: ${userId}`;
+                if (isEphemeral) {
+                    return { type: 4, data: { content: errorMsg, flags: 64 } };
+                }
+                return;
             }
             
             const avatarUrl = user.avatar 
@@ -81,6 +98,14 @@ const userInfoCommand = {
                 ? formatTimestamp(Date.parse(user.created_at)) 
                 : formatTimestampFromSnowflake(user.id);
             
+            let decorationLinks = "None";
+            let skuInfo = null;
+            if (user.avatar_decoration) {
+                const decoUrl = `https://cdn.discordapp.com/avatar-decoration-presets/${user.avatar_decoration}.png?size=256`;
+                decorationLinks = `${maskUrl("PNG", decoUrl)} | ${maskUrl("JPG", decoUrl)} | ${maskUrl("WebP", decoUrl)}`;
+                skuInfo = user.avatar_decoration;
+            }
+            
             const fields = [
                 { name: "Username", value: user.username, inline: true },
                 { name: "Display Name", value: user.global_name || user.username, inline: true },
@@ -90,16 +115,17 @@ const userInfoCommand = {
                 { name: "Banner", value: bannerLink, inline: true },
                 { name: "Accent Color", value: accentColor, inline: true },
                 { name: "Badges", value: badges, inline: false },
-                { name: "Bot", value: user.bot ? "Yes" : "No", inline: true },
-                { name: "ID", value: `\`${user.id}\``, inline: false }
+                { name: "Bot", value: user.bot ? "Yes" : "No", inline: true }
             ];
             
             if (user.avatar_decoration) {
-                const decoUrl = `https://cdn.discordapp.com/avatar-decoration-presets/${user.avatar_decoration}.png?size=256`;
-                const decorationLinks = `${maskUrl("PNG", decoUrl)} | ${maskUrl("JPG", decoUrl)} | ${maskUrl("WebP", decoUrl)}`;
-                fields.push({ name: "Avatar Decoration", value: decorationLinks, inline: true });
-                fields.push({ name: "SKU", value: user.avatar_decoration, inline: false });
+                fields.push(
+                    { name: "Avatar Decoration", value: decorationLinks, inline: true },
+                    { name: "SKU", value: skuInfo, inline: false }
+                );
             }
+            
+            fields.push({ name: "ID", value: `\`${user.id}\``, inline: false });
             
             const embed = {
                 color: EMBED_COLOR(),
@@ -109,70 +135,77 @@ const userInfoCommand = {
                 fields: fields
             };
             
-            return {
-                type: 4,
-                data: {
+            if (isEphemeral) {
+                return {
+                    type: 4,
+                    data: {
+                        embeds: [embed],
+                        flags: 64
+                    }
+                };
+            } else {
+                const messageMods = {
+                    ...authorMods,
+                    interaction: {
+                        name: "/userinfo",
+                        user: findByStoreName("UserStore").getCurrentUser(),
+                    },
+                };
+                sendMessage({
+                    loggingName: "UserInfo output",
+                    channelId: ctx.channel.id,
                     embeds: [embed],
-                    flags: 64
-                }
-            };
-            
+                }, messageMods);
+                return null;
+            }
         } catch (error) {
             console.error("[UserInfo] Error:", error);
-            return {
-                type: 4,
-                data: {
-                    content: "Error fetching user information.",
-                    flags: 64
-                }
-            };
+            return null;
         }
-    },
-    applicationId: "-1",
-    inputType: 1,
-    type: 1,
-};
+    }
+});
 
 // Server Info Command
-const serverInfoCommand = {
+const serverInfoCommand = common.cmdDisplays({
+    type: 1,
+    inputType: 1,
+    applicationId: "-1",
     name: "serverinfo",
-    displayName: "serverinfo",
     description: "Get information about a server by ID",
-    displayDescription: "Get information about a server by ID",
     options: [
         {
-            name: "server_id",
-            displayName: "server_id",
-            description: "ID of the server",
-            displayDescription: "ID of the server",
-            type: 3,
             required: true,
+            type: 3,
+            name: "server_id",
+            description: "ID of the server",
+        },
+        {
+            required: false,
+            type: 5,
+            name: "ephemeral",
+            description: "Send as ephemeral message",
         }
     ],
     execute: async (args, ctx) => {
         try {
             const guildId = args.find(a => a.name === "server_id")?.value;
+            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || false;
             
             if (!guildId) {
-                return {
-                    type: 4,
-                    data: {
-                        content: "Please provide a server ID.",
-                        flags: 64
-                    }
-                };
+                if (isEphemeral) {
+                    return { type: 4, data: { content: "Please provide a server ID.", flags: 64 } };
+                }
+                return;
             }
             
             const guild = await fetchGuild(guildId);
             
             if (!guild) {
-                return {
-                    type: 4,
-                    data: {
-                        content: `Server not found: ${guildId}`,
-                        flags: 64
-                    }
-                };
+                const errorMsg = `Server not found: ${guildId}`;
+                if (isEphemeral) {
+                    return { type: 4, data: { content: errorMsg, flags: 64 } };
+                }
+                return;
             }
             
             const featureMap = {
@@ -195,8 +228,9 @@ const serverInfoCommand = {
             const explicitContentFilterMap = { 0: "Disabled", 1: "Members Without Roles", 2: "All Members" };
             
             const features = (guild.features || [])
-                .slice(0, 20)
-                .map(f => featureMap[f] || f.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, l => l.toUpperCase()))
+                .map(f => featureMap[f] || f)
+                .sort()
+                .slice(0, 15)
                 .join(", ");
             
             const iconUrl = guild.icon ? getGuildIconUrl(guild.id, guild.icon) : null;
@@ -216,7 +250,6 @@ const serverInfoCommand = {
             const preferredLocale = guild.preferred_locale || "en-US";
             
             const fields = [
-                { name: "Owner", value: `<@${guild.owner_id}>`, inline: true },
                 { name: "Owner ID", value: `\`${guild.owner_id}\``, inline: true },
                 { name: "Created", value: createdDate, inline: true },
                 { name: "Members", value: `${memberCount.toLocaleString()} total\n${presenceCount.toLocaleString()} online (${onlinePercentage}%)`, inline: true },
@@ -224,7 +257,7 @@ const serverInfoCommand = {
                 { name: "Verification", value: verificationMap[guild.verification_level || 0], inline: true },
                 { name: "NSFW Level", value: nsfwLevelMap[guild.nsfw_level || 0], inline: true },
                 { name: "MFA Level", value: mfaLevelMap[guild.mfa_level || 0], inline: true },
-                { name: "Explicit Content Filter", value: explicitContentFilterMap[guild.explicit_content_filter || 0], inline: true },
+                { name: "Explicit Content", value: explicitContentFilterMap[guild.explicit_content_filter || 0], inline: true },
                 { name: "AFK Timeout", value: afkTimeout, inline: true },
                 { name: "Locale", value: preferredLocale, inline: true },
                 { name: "Widget", value: guild.widget_enabled ? "Enabled" : "Disabled", inline: true },
@@ -243,77 +276,90 @@ const serverInfoCommand = {
                 title: guild.name,
                 description: guild.description || "No description.",
                 thumbnail: iconUrl ? { url: iconUrl } : undefined,
-                image: bannerUrl ? { url: bannerUrl } : (splashUrl ? { url: splashUrl } : (discoverySplashUrl ? { url: discoverySplashUrl } : undefined)),
+                image: bannerUrl || splashUrl || discoverySplashUrl ? { url: bannerUrl || splashUrl || discoverySplashUrl } : undefined,
                 fields: fields
             };
             
-            return {
-                type: 4,
-                data: {
+            if (isEphemeral) {
+                return {
+                    type: 4,
+                    data: {
+                        embeds: [embed],
+                        flags: 64
+                    }
+                };
+            } else {
+                const messageMods = {
+                    ...authorMods,
+                    interaction: {
+                        name: "/serverinfo",
+                        user: findByStoreName("UserStore").getCurrentUser(),
+                    },
+                };
+                sendMessage({
+                    loggingName: "ServerInfo output",
+                    channelId: ctx.channel.id,
                     embeds: [embed],
-                    flags: 64
-                }
-            };
-            
+                }, messageMods);
+                return null;
+            }
         } catch (error) {
             console.error("[ServerInfo] Error:", error);
-            return {
-                type: 4,
-                data: {
-                    content: "Error fetching server information.",
-                    flags: 64
-                }
-            };
+            return null;
         }
-    },
-    applicationId: "-1",
-    inputType: 1,
-    type: 1,
-};
+    }
+});
 
 // Invite Info Command
-const inviteInfoCommand = {
+const inviteInfoCommand = common.cmdDisplays({
+    type: 1,
+    inputType: 1,
+    applicationId: "-1",
     name: "inviteinfo",
-    displayName: "inviteinfo",
     description: "Get server information from an invite code or URL",
-    displayDescription: "Get server information from an invite code or URL",
     options: [
         {
-            name: "invite",
-            displayName: "invite",
-            description: "Invite code or URL (e.g., discord.gg/bloxfruit)",
-            displayDescription: "Invite code or URL (e.g., discord.gg/bloxfruit)",
-            type: 3,
             required: true,
+            type: 3,
+            name: "invite",
+            description: "Invite code or URL (e.g., discord.gg/example)",
+        },
+        {
+            required: false,
+            type: 5,
+            name: "ephemeral",
+            description: "Send as ephemeral message",
         }
     ],
     execute: async (args, ctx) => {
         try {
             let inviteInput = args.find(a => a.name === "invite")?.value;
+            const isEphemeral = args.find(a => a.name === "ephemeral")?.value || false;
             
             if (!inviteInput) {
-                return {
-                    type: 4,
-                    data: {
-                        content: "Please provide an invite code or URL.",
-                        flags: 64
-                    }
-                };
+                if (isEphemeral) {
+                    return { type: 4, data: { content: "Please provide an invite code or URL.", flags: 64 } };
+                }
+                return;
             }
             
-            const urlMatch = inviteInput.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
-            if (urlMatch) inviteInput = urlMatch[1];
+            const extractInviteCode = (input) => {
+                const urlMatch = input.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
+                if (urlMatch) return urlMatch[1];
+                const codeMatch = input.match(/^([a-zA-Z0-9_-]+)/);
+                if (codeMatch) return codeMatch[1];
+                return input;
+            };
             
-            const invite = await fetchInvite(inviteInput);
+            const inviteCode = extractInviteCode(inviteInput);
+            const invite = await fetchInvite(inviteCode);
             
             if (!invite || !invite.guild) {
-                return {
-                    type: 4,
-                    data: {
-                        content: `Invalid invite: ${inviteInput}`,
-                        flags: 64
-                    }
-                };
+                const errorMsg = `Invalid or expired invite: ${inviteCode}`;
+                if (isEphemeral) {
+                    return { type: 4, data: { content: errorMsg, flags: 64 } };
+                }
+                return;
             }
             
             const guild = invite.guild;
@@ -354,29 +400,35 @@ const inviteInfoCommand = {
                 fields: fields
             };
             
-            return {
-                type: 4,
-                data: {
+            if (isEphemeral) {
+                return {
+                    type: 4,
+                    data: {
+                        embeds: [embed],
+                        flags: 64
+                    }
+                };
+            } else {
+                const messageMods = {
+                    ...authorMods,
+                    interaction: {
+                        name: "/inviteinfo",
+                        user: findByStoreName("UserStore").getCurrentUser(),
+                    },
+                };
+                sendMessage({
+                    loggingName: "InviteInfo output",
+                    channelId: ctx.channel.id,
                     embeds: [embed],
-                    flags: 64
-                }
-            };
-            
+                }, messageMods);
+                return null;
+            }
         } catch (error) {
             console.error("[InviteInfo] Error:", error);
-            return {
-                type: 4,
-                data: {
-                    content: "Error fetching invite information.",
-                    flags: 64
-                }
-            };
+            return null;
         }
-    },
-    applicationId: "-1",
-    inputType: 1,
-    type: 1,
-};
+    }
+});
 
 const commands = [userInfoCommand, serverInfoCommand, inviteInfoCommand];
 const patches = [];
