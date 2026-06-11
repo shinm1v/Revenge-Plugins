@@ -1,0 +1,15 @@
+{
+    "name": "InfoCommands",
+    "version": "1.0.0",
+    "description": "Commands to Get user, server, and invite information.",
+    "authors": [
+        {
+            "name": "fshin",
+            "id": "1381008677301129257"
+        }
+    ],
+    "main": "index.ts",
+    "vendetta": {
+        "icon": "ic_info_24px"
+    }
+}
