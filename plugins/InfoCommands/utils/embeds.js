@@ -3,14 +3,8 @@ import { findByProps } from "@vendetta/metro";
 const API = findByProps("get", "post");
 
 export function formatTimestamp(timestamp) {
-    if (!timestamp) return "Unknown";
+    if (!timestamp || isNaN(timestamp)) return "Unknown";
     return `<t:${Math.floor(timestamp / 1000)}:R>`;
-}
-
-export function formatDate(timestamp) {
-    if (!timestamp) return "Unknown";
-    const date = new Date(timestamp);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export function maskUrl(text, url) {
@@ -66,7 +60,7 @@ export async function fetchGuild(guildId) {
 
 export async function fetchInvite(inviteCode) {
     try {
-        const response = await API.get({ url: `/invites/${inviteCode}` });
+        const response = await API.get({ url: `/invites/${inviteCode}?with_counts=true` });
         return response.body;
     } catch (e) {
         console.error("[API] Failed to fetch invite:", e);
