@@ -3,7 +3,6 @@ import { findByProps } from "@vendetta/metro";
 const API = findByProps("get", "post");
 const DISCORD_EPOCH = 1420070400000;
 
-// Convert Snowflake ID to timestamp
 export function snowflakeToTimestamp(snowflake) {
     try {
         const id = BigInt(snowflake);
@@ -16,7 +15,7 @@ export function snowflakeToTimestamp(snowflake) {
 }
 
 export function formatTimestamp(timestamp) {
-    if (!timestamp || isNaN(timestamp)) return "Unknown";
+    if (!timestamp) return "Unknown";
     return `<t:${Math.floor(timestamp / 1000)}:R>`;
 }
 
@@ -85,7 +84,6 @@ export function getGuildDiscoverySplashUrl(guildId, discoverySplashHash) {
     return `https://cdn.discordapp.com/discovery-splashes/${guildId}/${discoverySplashHash}.png?size=1024`;
 }
 
-// Decode user badges
 export function decodeBadges(flags) {
     const badges = {
         1 << 0: "Staff",
@@ -101,8 +99,7 @@ export function decodeBadges(flags) {
         1 << 12: "Verified Bot",
         1 << 13: "Early Verified Bot Developer",
         1 << 14: "Discord Certified Moderator",
-        1 << 16: "Active Developer",
-        1 << 18: "BOT_HTTP_INTERACTIONS"
+        1 << 16: "Active Developer"
     };
     
     const userBadges = [];
