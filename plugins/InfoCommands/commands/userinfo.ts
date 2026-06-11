@@ -1,6 +1,6 @@
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import { getEmbedColor, formatTimestamp, formatAvatarLinks, sendEmbed, maskUrl, fetchUser } from "../utils/embeds";
+import { getEmbedColor, formatTimestamp, formatAvatarLinks, maskUrl, fetchUser, createSafeEmbed } from "../utils/embeds";
 
 export const userInfoCommand = {
     name: "userinfo",
@@ -44,7 +44,7 @@ export const userInfoCommand = {
             
             const user = await fetchUser(userId);
             
-            if (!user) {
+            if (!user || !user.id) {
                 const errorMsg = `User not found: ${userId}`;
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
@@ -68,10 +68,10 @@ export const userInfoCommand = {
             }
             
             const fields = [
-                { name: "Username", value: user.username, inline: true },
-                { name: "Display Name", value: user.global_name || user.username, inline: true },
+                { name: "Username", value: user.username ?? "Unknown", inline: true },
+                { name: "Display Name", value: user.global_name ?? user.username ?? "Unknown", inline: true },
                 { name: "Mention", value: `<@${user.id}>`, inline: true },
-                { name: "Created", value: formatTimestamp(Date.parse(user.created_at)), inline: true },
+                { name: "Created", value: user.created_at ? formatTimestamp(Date.parse(user.created_at)) : "Unknown", inline: true },
                 { name: "Avatar", value: avatarLinks, inline: true }
             ];
             
@@ -87,14 +87,26 @@ export const userInfoCommand = {
                 { name: "ID", value: user.id, inline: false }
             );
             
-            const embed = {
+            const embed = createSafeEmbed({
                 color: getEmbedColor(),
-                type: "rich",
-                author: { name: user.username, icon_url: avatarUrl },
+                author: avatarUrl ? { name: user.username ?? "User", icon_url: avatarUrl } : { name: user.username ?? "User" },
                 fields: fields
-            };
+            });
             
-            return sendEmbed(ctx.channel.id, embed, isEphemeral);
+            const { sendBotMessage } = findByProps("sendBotMessage", "sendMessage", "receiveMessage");
+            
+            if (isEphemeral) {
+                return {
+                    type: 4,
+                    data: {
+                        embeds: [embed],
+                        flags: 64
+                    }
+                };
+            } else {
+                sendBotMessage(ctx.channel.id, { embeds: [embed] });
+                return null;
+            }
             
         } catch (error) {
             console.error("[UserInfo] Error:", error);
