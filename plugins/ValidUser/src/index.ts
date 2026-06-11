@@ -53,9 +53,11 @@ function isUserCached(userId: string): boolean {
 }
 
 async function forceUIRefresh(channelId: string, messageId: string, content: string) {
+    logger.log("[ValidUser] forceUIRefresh called");
     const Dispatcher = findByProps("dispatch", "subscribe");
     const freshContent = content + " ";
 
+    logger.log("[ValidUser] Dispatching first MESSAGE_UPDATE with +space");
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
@@ -66,7 +68,7 @@ async function forceUIRefresh(channelId: string, messageId: string, content: str
     });
 
     await sleep(50);
-
+    logger.log("[ValidUser] Dispatching second MESSAGE_UPDATE restoring original");
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
@@ -75,29 +77,40 @@ async function forceUIRefresh(channelId: string, messageId: string, content: str
             content: content 
         }
     });
+    logger.log("[ValidUser] forceUIRefresh complete");
 }
 
 async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
+    logger.log(`[ValidUser] fetchUsersViaGateway called for ${userIds.length} users`);
     const GatewayConnection = findByProps("getGateway", "send");
     const SelectedGuildStore = findByProps("getGuildId", "getChannelId");
 
     const currentGuildId = SelectedGuildStore?.getGuildId?.();
-    if (!currentGuildId) return false;
+    if (!currentGuildId) {
+        logger.warn("[ValidUser] No guild context for gateway request");
+        return false;
+    }
 
     const ws = GatewayConnection?.getGateway?.();
-    if (!ws) return false;
+    if (!ws) {
+        logger.warn("[ValidUser] Gateway connection not available");
+        return false;
+    }
 
+    logger.log(`[ValidUser] Sending gateway request for ${userIds.length} users`);
     ws.send(8, {
         guild_id: currentGuildId,
         user_ids: userIds,
         presences: false
     });
 
-    await sleep(400); 
+    await sleep(400);
+    logger.log("[ValidUser] Gateway request complete");
     return true;
 }
 
 async function fetchUsersViaAPI(userId: string, token: string, API: any, Dispatcher: any) {
+    logger.log(`[ValidUser] fetchUsersViaAPI called for ${userId}`);
     const cleanToken = typeof token === "string" ? token : (token as any)?.token || "";
 
     const res = await API.get({
@@ -112,26 +125,35 @@ async function fetchUsersViaAPI(userId: string, token: string, API: any, Dispatc
             type: "USER_UPDATE",
             user: res.body
         });
+        logger.log(`[ValidUser] Successfully fetched and cached user: ${res.body.username}`);
         return res.body.username;
     }
+    logger.error("[ValidUser] Empty API response body");
     throw new Error("Empty API response body");
 }
 
 async function fixUnknownMentions(message: any) {
+    logger.log("[ValidUser] fixUnknownMentions called");
     const ids = extractAllMentionIds(message);
     const channelId = message.channel_id;
     const messageId = message.id;
 
+    logger.log(`[ValidUser] Found ${ids.length} mention(s) in message`);
     if (ids.length === 0) return;
 
     const uncachedIds: string[] = [];
     for (const userId of ids) {
-        if (!isUserCached(userId)) {
+        const cached = isUserCached(userId);
+        logger.log(`[ValidUser] User ${userId} cached: ${cached}`);
+        if (!cached) {
             uncachedIds.push(userId);
         }
     }
 
+    logger.log(`[ValidUser] ${uncachedIds.length} user(s) not cached`);
+
     if (uncachedIds.length === 0) {
+        logger.log("[ValidUser] All users cached, refreshing UI only");
         if (channelId && messageId) {
             await forceUIRefresh(channelId, messageId, message.content);
         }
@@ -143,21 +165,30 @@ async function fixUnknownMentions(message: any) {
 
     const SelectedGuildStore = findByProps("getGuildId");
     if (uncachedIds.length > BULK_THRESHOLD && SelectedGuildStore?.getGuildId?.()) {
+        logger.log(`[ValidUser] Attempting gateway bulk fetch for ${uncachedIds.length} users`);
         success = await fetchUsersViaGateway(uncachedIds);
+    } else {
+        logger.log(`[ValidUser] Bulk threshold not met, skipping gateway`);
     }
 
     if (!success) {
+        logger.log(`[ValidUser] Falling back to individual API requests for ${uncachedIds.length} users`);
         const API = findByProps("get", "post");
         const Dispatcher = findByProps("dispatch", "subscribe");
         const TokenStore = findByProps("getToken");
         const token = TokenStore?.getToken();
 
-        if (!token) return;
+        if (!token) {
+            logger.error("[ValidUser] No token available");
+            return;
+        }
 
         const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
+        logger.log(`[ValidUser] Using delay of ${safetyDelay}ms between requests`);
 
         for (let i = 0; i < uncachedIds.length; i++) {
             const userId = uncachedIds[i];
+            logger.log(`[ValidUser] Fetching user ${i+1}/${uncachedIds.length}: ${userId}`);
             try {
                 await fetchUsersViaAPI(userId, token, API, Dispatcher);
             } catch (err) {
@@ -170,34 +201,41 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (channelId && messageId) {
+        logger.log("[ValidUser] Final UI refresh after fetching all users");
         await forceUIRefresh(channelId, messageId, message.content);
     }
+    logger.log("[ValidUser] fixUnknownMentions complete");
 }
 
 let unpatchOpenLazy: (() => void) | null = null;
 
 export default {
     onLoad() {
+        logger.log("[ValidUser] Plugin loaded");
         unpatchOpenLazy = before("openLazy", ActionSheet, ([comp, args, msg]) => {
             if (args !== "MessageLongPressActionSheet" || !msg?.message) return;
 
             const message = msg.message;
             const ids = extractAllMentionIds(message);
 
+            logger.log(`[ValidUser] ActionSheet opened, found ${ids.length} mention(s)`);
             if (ids.length === 0) return;
 
             comp.then((instance: any) => {
                 const unpatch = after("default", instance, (_: any, component: any) => {
                     React.useEffect(() => () => { unpatch(); }, []);
 
+                    logger.log("[ValidUser] Looking for ActionSheetRowGroup");
                     const groups: any[] = findInReactTree(
                         component,
                         (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
                     );
 
                     if (!groups?.length) {
+                        logger.warn("[ValidUser] No ActionSheetRowGroup found");
                         return;
                     }
+                    logger.log(`[ValidUser] Found ${groups.length} ActionSheetRowGroup(s)`);
 
                     const fixButton = React.createElement(ActionSheetRow, {
                         label: ids.length === 1 ? "Fix Unknown Mention" : `Fix ${ids.length} Unknown Mentions`,
@@ -205,6 +243,7 @@ export default {
                             source: MentionIcon,
                         }),
                         onPress: () => {
+                            logger.log("[ValidUser] Button pressed");
                             ActionSheet.hideActionSheet();
                             fixUnknownMentions(message);
                         },
@@ -220,22 +259,26 @@ export default {
                         );
                         if (!groupChildren) continue;
 
+                        logger.log(`[ValidUser] Inserting button into group ${gi}`);
                         groupChildren.unshift(fixButton);
                         inserted = true;
                         break;
                     }
 
                     if (!inserted) {
+                        logger.warn("[ValidUser] No suitable group children found, adding as new group");
                         groups.unshift(
                             React.createElement(ActionSheetRow.Group, null, fixButton)
                         );
                     }
+                    logger.log("[ValidUser] Button insertion complete");
                 });
             });
         });
     },
 
     onUnload() {
+        logger.log("[ValidUser] Plugin unloaded");
         unpatchOpenLazy?.();
         unpatchOpenLazy = null;
     },
