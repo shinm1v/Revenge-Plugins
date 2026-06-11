@@ -52,16 +52,36 @@ function isUserCached(userId: string): boolean {
     return !!user;
 }
 
-async function forceUIRefresh(channelId: string, messageId: string, content: string) {
+async function forceUIRefresh(channelId: string, messageId: string, originalMessage: any) {
     const Dispatcher = findByProps("dispatch", "subscribe");
-    const freshContent = content + " ";
+    
+    logger.log(`[ValidUser] Blinking string cache for message: ${messageId}`);
+    const freshContent = (originalMessage.content || "") + " ";
+    let freshEmbeds = [];
+
+    if (originalMessage.embeds && Array.isArray(originalMessage.embeds)) {
+        freshEmbeds = originalMessage.embeds.map((embed: any) => {
+            const cloned = { ...embed };
+            if (cloned.rawTitle) cloned.rawTitle = cloned.rawTitle + " ";
+            if (cloned.rawDescription) cloned.rawDescription = cloned.rawDescription + " ";
+            if (cloned.fields && Array.isArray(cloned.fields)) {
+                cloned.fields = cloned.fields.map((f: any) => ({
+                    ...f,
+                    name: f.name ? f.name + " " : f.name,
+                    value: f.value ? f.value + " " : f.value
+                }));
+            }
+            return cloned;
+        });
+    }
 
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
             id: messageId,
             channel_id: channelId,
-            content: freshContent 
+            content: freshContent,
+            embeds: freshEmbeds
         }
     });
 
@@ -72,7 +92,8 @@ async function forceUIRefresh(channelId: string, messageId: string, content: str
         message: {
             id: messageId,
             channel_id: channelId,
-            content: content 
+            content: originalMessage.content || "",
+            embeds: originalMessage.embeds || []
         }
     });
 }
@@ -82,10 +103,18 @@ async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
     const SelectedGuildStore = findByProps("getGuildId", "getChannelId");
     
     const currentGuildId = SelectedGuildStore?.getGuildId?.();
-    if (!currentGuildId) return false;
+    if (!currentGuildId) {
+        logger.warn("[ValidUser] No guild context available for gateway query");
+        return false;
+    }
 
     const ws = GatewayConnection?.getGateway?.();
-    if (!ws) return false;
+    if (!ws) {
+        logger.warn("[ValidUser] Gateway connection dead");
+        return false;
+    }
+
+    logger.log(`[ValidUser] Dispatching bulk Gateway request for ${userIds.length} IDs.`);
 
     ws.send(8, {
         guild_id: currentGuildId,
@@ -122,7 +151,10 @@ async function fixUnknownMentions(message: any) {
     const channelId = message.channel_id;
     const messageId = message.id;
 
-    if (ids.length === 0) return;
+    if (ids.length === 0) {
+        logger.log("[ValidUser] Checked element: 0 mentions found");
+        return;
+    }
 
     const uncachedIds: string[] = [];
     for (const userId of ids) {
@@ -132,11 +164,14 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (uncachedIds.length === 0) {
+        logger.log("[ValidUser] All profiles exist locally. Forcing render verify.");
         if (channelId && messageId) {
-            await forceUIRefresh(channelId, messageId, message.content);
+            await forceUIRefresh(channelId, messageId, message);
         }
         return;
     }
+
+    logger.log(`[ValidUser] Uncached target load: ${uncachedIds.length} profiles.`);
 
     const BULK_THRESHOLD = 5;
     let success = false;
@@ -147,21 +182,26 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (!success) {
+        logger.log(`[ValidUser] Initializing REST API fallback sequence`);
         const API = findByProps("get", "post");
         const Dispatcher = findByProps("dispatch", "subscribe");
         const TokenStore = findByProps("getToken");
         const token = TokenStore?.getToken();
 
-        if (!token) return;
+        if (!token) {
+            logger.error("[ValidUser] Critical Halt: Missing system token.");
+            return;
+        }
 
         const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
 
         for (let i = 0; i < uncachedIds.length; i++) {
             const userId = uncachedIds[i];
             try {
-                await fetchUsersViaAPI(userId, token, API, Dispatcher);
+                const username = await fetchUsersViaAPI(userId, token, API, Dispatcher);
+                logger.log(`[ValidUser] Pulled profile: ${username} [${i+1}/${uncachedIds.length}]`);
             } catch (err) {
-                logger.error(`[ValidUser] Fetch Failed for ${userId}:`, err);
+                logger.error(`[ValidUser] API Fault for ${userId}:`, err);
             }
             if (i < uncachedIds.length - 1) {
                 await sleep(safetyDelay);
@@ -170,7 +210,8 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (channelId && messageId) {
-        await forceUIRefresh(channelId, messageId, message.content);
+        await forceUIRefresh(channelId, messageId, message);
+        logger.log("[ValidUser] Resolution pipeline completed cleanly.");
     }
 }
 
@@ -192,10 +233,11 @@ export default {
 
                     const groups: any[] = findInReactTree(
                         component,
-                        (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
+                        (c: any) => Array.isArray(c) && c?.type?.name === "ActionSheetRowGroup"
                     );
 
                     if (!groups?.length) {
+                        logger.warn("[ValidUser] Sheet tracking lost: RowGroups missing.");
                         return;
                     }
 
@@ -226,6 +268,7 @@ export default {
                     }
 
                     if (!inserted) {
+                        logger.warn("[ValidUser] Appending layout fallback group block");
                         groups.unshift(
                             React.createElement(ActionSheetRow.Group, null, fixButton)
                         );
@@ -233,10 +276,12 @@ export default {
                 });
             });
         });
+        logger.log("[ValidUser] Plugin linked dynamically with embed tracking.");
     },
 
     onUnload() {
         unpatchOpenLazy?.();
         unpatchOpenLazy = null;
+        logger.log("[ValidUser] Plugin terminated.");
     },
 };
