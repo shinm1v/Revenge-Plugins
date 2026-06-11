@@ -1,6 +1,6 @@
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import { getEmbedColor, formatTimestamp, formatDate, maskUrl, getGuildIconUrl, sendEmbed, fetchInvite } from "../utils/embeds";
+import { getEmbedColor, formatTimestamp, formatDate, maskUrl, getGuildIconUrl, fetchInvite, createSafeEmbed } from "../utils/embeds";
 
 function extractInviteCode(input: string): string {
     const urlMatch = input.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
@@ -71,7 +71,7 @@ export const inviteInfoCommand = {
             const inviteCode = extractInviteCode(inviteInput);
             const invite = await fetchInvite(inviteCode);
             
-            if (!invite || !invite.guild) {
+            if (!invite || !invite.guild || !invite.guild.id) {
                 const errorMsg = `Invalid or expired invite: ${inviteCode}`;
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
@@ -81,8 +81,8 @@ export const inviteInfoCommand = {
             }
             
             const guild = invite.guild;
-            const memberCount = invite.approximate_member_count || 0;
-            const onlineCount = invite.approximate_presence_count || 0;
+            const memberCount = invite.approximate_member_count ?? 0;
+            const onlineCount = invite.approximate_presence_count ?? 0;
             
             const features = (guild.features || [])
                 .map((f: string) => featureMap[f] || f)
@@ -90,7 +90,19 @@ export const inviteInfoCommand = {
                 .slice(0, 11);
             
             const iconUrl = guild.icon ? getGuildIconUrl(guild.id, guild.icon) : null;
-            const expiresText = invite.expires_at ? formatDate(Date.parse(invite.expires_at)) : "Never";
+            
+            // SAFE date parsing - handles both timestamps and ISO strings
+            let expiresText = "Never";
+            if (invite.expires_at) {
+                try {
+                    const expiresDate = typeof invite.expires_at === 'string' ? Date.parse(invite.expires_at) : invite.expires_at;
+                    if (!isNaN(expiresDate)) {
+                        expiresText = formatDate(expiresDate);
+                    }
+                } catch (e) {
+                    expiresText = "Unknown";
+                }
+            }
             
             const fields = [
                 {
@@ -100,7 +112,7 @@ export const inviteInfoCommand = {
                 },
                 {
                     name: "Details",
-                    value: `Created: ${formatTimestamp(Date.parse(guild.created_at))}\nBoost: Level ${guild.premium_tier || 0} (${guild.premium_subscription_count || 0} boosts)\nVerification: ${verificationMap[guild.verification_level || 0]}\nNSFW: ${nsfwLevelMap[guild.nsfw_level || 0]}`,
+                    value: `Created: ${guild.created_at ? formatTimestamp(Date.parse(guild.created_at)) : "Unknown"}\nBoost: Level ${guild.premium_tier ?? 0} (${guild.premium_subscription_count ?? 0} boosts)\nVerification: ${verificationMap[guild.verification_level ?? 0]}\nNSFW: ${nsfwLevelMap[guild.nsfw_level ?? 0]}`,
                     inline: false
                 }
             ];
@@ -116,22 +128,34 @@ export const inviteInfoCommand = {
             fields.push(
                 {
                     name: "Invite Info",
-                    value: `Code: \`${invite.code}\`\nChannel: #${invite.channel?.name || "unknown"}\nInviter: ${invite.inviter?.username || "Vanity URL"}\nExpires: ${expiresText}\nMax Uses: ${invite.max_uses || "Unlimited"}`,
+                    value: `Code: \`${invite.code ?? "Unknown"}\`\nChannel: #${invite.channel?.name ?? "unknown"}\nInviter: ${invite.inviter?.username ?? "Vanity URL"}\nExpires: ${expiresText}\nMax Uses: ${invite.max_uses ?? "Unlimited"}`,
                     inline: false
                 },
                 { name: "ID", value: guild.id, inline: true }
             );
             
-            const embed = {
+            const embed = createSafeEmbed({
                 color: getEmbedColor(),
-                type: "rich",
-                title: guild.name,
-                description: guild.description || "No description.",
+                title: guild.name ?? "Unknown Server",
+                description: guild.description ?? "No description.",
                 thumbnail: iconUrl ? { url: iconUrl } : undefined,
                 fields: fields
-            };
+            });
             
-            return sendEmbed(ctx.channel.id, embed, isEphemeral);
+            const { sendBotMessage } = findByProps("sendBotMessage", "sendMessage", "receiveMessage");
+            
+            if (isEphemeral) {
+                return {
+                    type: 4,
+                    data: {
+                        embeds: [embed],
+                        flags: 64
+                    }
+                };
+            } else {
+                sendBotMessage(ctx.channel.id, { embeds: [embed] });
+                return null;
+            }
             
         } catch (error) {
             console.error("[InviteInfo] Error:", error);
