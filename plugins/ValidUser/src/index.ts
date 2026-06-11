@@ -54,8 +54,19 @@ function isUserCached(userId: string): boolean {
 
 async function forceUIRefresh(channelId: string, messageId: string, content: string) {
     const Dispatcher = findByProps("dispatch", "subscribe");
-    
-    // Step 1: Force this specific message view container to drop its cached layout tokens
+    const freshContent = content + " ";
+
+    Dispatcher.dispatch({
+        type: "MESSAGE_UPDATE",
+        message: {
+            id: messageId,
+            channel_id: channelId,
+            content: freshContent 
+        }
+    });
+
+    await sleep(50);
+
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
@@ -63,15 +74,6 @@ async function forceUIRefresh(channelId: string, messageId: string, content: str
             channel_id: channelId,
             content: content 
         }
-    });
-
-    await sleep(25);
-
-    // Step 2: Flush the layout buffer to enforce immediate re-parsing with new profiles
-    Dispatcher.dispatch({
-        type: "LOAD_MESSAGES_SUCCESS",
-        channelId: channelId,
-        messages: []
     });
 }
 
@@ -93,24 +95,22 @@ async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
 
     logger.log(`[ValidUser] Sending bulk gateway request for ${userIds.length} users.`);
 
-    ws.send(8, { // OP 8: REQUEST_GUILD_MEMBERS
+    ws.send(8, {
         guild_id: currentGuildId,
         user_ids: userIds,
         presences: false
     });
 
-    await sleep(400); // Allow time for WebSocket payload round-trip stream
+    await sleep(400); 
     return true;
 }
 
 async function fetchUsersViaAPI(userId: string, token: string, API: any, Dispatcher: any) {
-    // Correctly strip potential internal string wrappers or objects around the authorization token string
     const cleanToken = typeof token === "string" ? token : (token as any)?.token || "";
     
     const res = await API.get({
         url: `/users/${userId}`,
         headers: {
-            // Ensure no leading spaces or formatting breaks exist
             Authorization: cleanToken.trim()
         }
     });
@@ -142,9 +142,8 @@ async function fixUnknownMentions(message: any) {
         }
     }
 
-    // Modern atomic re-render fallback
     if (uncachedIds.length === 0) {
-        logger.log("[ValidUser] All users already cached, forcing layout re-parse");
+        logger.log("[ValidUser] All users already cached, forcing clean string update");
         if (channelId && messageId) {
             await forceUIRefresh(channelId, messageId, message.content);
         }
@@ -156,7 +155,6 @@ async function fixUnknownMentions(message: any) {
     const BULK_THRESHOLD = 5;
     let success = false;
 
-    // Only attempt gateway requests if we are inside a Guild/Server channel context
     const SelectedGuildStore = findByProps("getGuildId");
     if (uncachedIds.length > BULK_THRESHOLD && SelectedGuildStore?.getGuildId?.()) {
         logger.log(`[ValidUser] Attempting gateway bulk fetch...`);
@@ -193,10 +191,9 @@ async function fixUnknownMentions(message: any) {
         }
     }
 
-    // Perform final unified visual update
     if (channelId && messageId) {
         await forceUIRefresh(channelId, messageId, message.content);
-        logger.log(`[ValidUser] Interface token caches cleared and updated successfully`);
+        logger.log(`[ValidUser] Component string updated safely without channel flashing`);
     }
 }
 
@@ -218,7 +215,7 @@ export default {
 
                     const groups: any[] = findInReactTree(
                         component,
-                        (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
+                        (c: any) => Array.isArray(c) && c?.type?.name === "ActionSheetRowGroup"
                     );
 
                     if (!groups?.length) {
@@ -262,7 +259,7 @@ export default {
             });
         });
 
-        logger.log("[ValidUser] Loaded smoothly.");
+        logger.log("[ValidUser] Safe reload initialized.");
     },
 
     onUnload() {
