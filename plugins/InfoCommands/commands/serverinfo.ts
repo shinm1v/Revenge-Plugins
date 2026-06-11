@@ -1,19 +1,18 @@
-import { findByProps, findByStoreName } from "@vendetta/metro";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import { getEmbedColor, formatTimestamp, maskUrl, getGuildIconUrl, sendEmbed } from "../utils/embeds";
+import { getEmbedColor, formatTimestamp, formatDate, maskUrl, getGuildIconUrl, sendEmbed, fetchInvite } from "../utils/embeds";
 
-const GuildStore = findByStoreName("GuildStore");
-const ChannelStore = findByStoreName("ChannelStore");
-const RoleStore = findByStoreName("RoleStore");
-const GuildMemberStore = findByStoreName("GuildMemberStore");
-const PresenceStore = findByStoreName("PresenceStore");
+function extractInviteCode(input: string): string {
+    const urlMatch = input.match(/(?:discord\.gg\/|discord\.com\/invite\/)([a-zA-Z0-9_-]+)/);
+    if (urlMatch) return urlMatch[1];
+    const codeMatch = input.match(/^([a-zA-Z0-9_-]+)/);
+    if (codeMatch) return codeMatch[1];
+    return input;
+}
 
 const featureMap: Record<string, string> = {
     "ANIMATED_ICON": "Animated Icon",
-    "BANNER": "Banner",
     "COMMUNITY": "Community",
-    "DISCOVERABLE": "Discoverable",
     "INVITE_SPLASH": "Invite Splash",
     "MEMBER_VERIFICATION_GATE_ENABLED": "Member Verification",
     "NEWS": "News Channels",
@@ -29,12 +28,20 @@ const nsfwLevelMap: Record<number, string> = {
     0: "Default", 1: "Explicit", 2: "Safe", 3: "Age Restricted"
 };
 
-export const serverInfoCommand = {
-    name: "serverinfo",
-    displayName: "serverinfo",
-    description: "Get information about the current server",
-    displayDescription: "Get information about the current server",
+export const inviteInfoCommand = {
+    name: "inviteinfo",
+    displayName: "inviteinfo",
+    description: "Get server information from an invite code or vanity URL",
+    displayDescription: "Get server information from an invite code or vanity URL",
     options: [
+        {
+            name: "invite",
+            displayName: "invite",
+            description: "Invite code or URL (e.g., discord.gg/example)",
+            displayDescription: "Invite code or URL (e.g., discord.gg/example)",
+            type: 3,
+            required: true,
+        },
         {
             name: "ephemeral",
             displayName: "ephemeral",
@@ -46,10 +53,26 @@ export const serverInfoCommand = {
     ],
     execute: async (args: any[], ctx: any) => {
         try {
+            const inviteInput = args.find((a: any) => a.name === "invite")?.value;
             const isEphemeral = args.find((a: any) => a.name === "ephemeral")?.value || false;
             
-            if (!ctx.guild?.id) {
-                const errorMsg = "This command can only be used in a server.";
+            if (!inviteInput) {
+                if (isEphemeral) {
+                    return { type: 4, data: { content: "Please provide an invite code or URL.", flags: 64 } };
+                }
+                showToast("Please provide an invite code or URL!", getAssetIDByName("Small"));
+                return null;
+            }
+            
+            if (!isEphemeral) {
+                showToast(`Fetching invite info...`, getAssetIDByName("DownloadIcon"));
+            }
+            
+            const inviteCode = extractInviteCode(inviteInput);
+            const invite = await fetchInvite(inviteCode);
+            
+            if (!invite || !invite.guild) {
+                const errorMsg = `Invalid or expired invite: ${inviteCode}`;
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
                 }
@@ -57,88 +80,47 @@ export const serverInfoCommand = {
                 return null;
             }
             
-            const guild = GuildStore.getGuild(ctx.guild.id);
-            if (!guild) {
-                const errorMsg = "Failed to fetch server information.";
-                if (isEphemeral) {
-                    return { type: 4, data: { content: errorMsg, flags: 64 } };
-                }
-                showToast(errorMsg, getAssetIDByName("Small"));
-                return null;
-            }
-            
-            const members = GuildMemberStore.getMembers(guild.id);
-            const memberCount = Object.keys(members || {}).length;
-            
-            let botCount = 0;
-            if (members) {
-                Object.values(members).forEach((member: any) => {
-                    if (member.user?.bot) botCount++;
-                });
-            }
-            const humanCount = memberCount - botCount;
-            
-            const presences = PresenceStore.getState()?.[guild.id] || {};
-            const onlineCount = Object.values(presences).filter((p: any) => p.status === "online").length;
-            
-            const channels = ChannelStore.getGuildChannels(guild.id);
-            let text = 0, voice = 0, category = 0, news = 0, forum = 0;
-            if (channels) {
-                Object.values(channels).forEach((channel: any) => {
-                    switch(channel.type) {
-                        case 0: text++; break;
-                        case 2: voice++; break;
-                        case 4: category++; break;
-                        case 5: news++; break;
-                        case 15: forum++; break;
-                    }
-                });
-            }
-            
-            const roleCount = Object.keys(RoleStore.getGuildRoles(guild.id) || {}).length;
-            const boostCount = guild.premiumSubscriptionCount || 0;
-            const boostLevel = guild.premiumTier || 0;
+            const guild = invite.guild;
+            const memberCount = invite.approximate_member_count || 0;
+            const onlineCount = invite.approximate_presence_count || 0;
             
             const features = (guild.features || [])
                 .map((f: string) => featureMap[f] || f)
                 .sort()
-                .slice(0, 10);
+                .slice(0, 11);
             
             const iconUrl = guild.icon ? getGuildIconUrl(guild.id, guild.icon) : null;
+            const expiresText = invite.expires_at ? formatDate(Date.parse(invite.expires_at)) : "Never";
             
             const fields = [
                 {
                     name: "Members",
-                    value: `${memberCount} total\n${humanCount} humans\n${botCount} bots\n${onlineCount} online`,
-                    inline: true
-                },
-                {
-                    name: "Channels",
-                    value: `${text} text\n${voice} voice\n${category} categories\n${news} news\n${forum} forum`,
+                    value: `${memberCount} total\n${onlineCount} online\n${memberCount - onlineCount} offline`,
                     inline: true
                 },
                 {
                     name: "Details",
-                    value: `Created: ${formatTimestamp(guild.createdAt)}\nBoost: Level ${boostLevel} (${boostCount})\nVerification: ${verificationMap[guild.verificationLevel || 0]}\nNSFW: ${nsfwLevelMap[guild.nsfwLevel || 0]}`,
+                    value: `Created: ${formatTimestamp(Date.parse(guild.created_at))}\nBoost: Level ${guild.premium_tier || 0} (${guild.premium_subscription_count || 0} boosts)\nVerification: ${verificationMap[guild.verification_level || 0]}\nNSFW: ${nsfwLevelMap[guild.nsfw_level || 0]}`,
                     inline: false
-                },
-                {
-                    name: `Features (${features.length})`,
-                    value: features.length > 0 ? features.join('\n') : "None",
-                    inline: false
-                },
-                { name: "Roles", value: `${roleCount} total roles`, inline: true }
+                }
             ];
             
-            if (guild.vanityURLCode) {
+            if (features.length > 0) {
                 fields.push({
-                    name: "Vanity URL",
-                    value: maskUrl(`discord.gg/${guild.vanityURLCode}`, `https://discord.gg/${guild.vanityURLCode}`),
-                    inline: true
+                    name: `Features (${features.length})`,
+                    value: features.join('\n'),
+                    inline: false
                 });
             }
             
-            fields.push({ name: "ID", value: guild.id, inline: false });
+            fields.push(
+                {
+                    name: "Invite Info",
+                    value: `Code: \`${invite.code}\`\nChannel: #${invite.channel?.name || "unknown"}\nInviter: ${invite.inviter?.username || "Vanity URL"}\nExpires: ${expiresText}\nMax Uses: ${invite.max_uses || "Unlimited"}`,
+                    inline: false
+                },
+                { name: "ID", value: guild.id, inline: true }
+            );
             
             const embed = {
                 color: getEmbedColor(),
@@ -152,12 +134,13 @@ export const serverInfoCommand = {
             return sendEmbed(ctx.channel.id, embed, isEphemeral);
             
         } catch (error) {
-            console.error("[ServerInfo] Error:", error);
+            console.error("[InviteInfo] Error:", error);
             const isEphemeral = args?.find?.((a: any) => a.name === "ephemeral")?.value || false;
+            const errorMsg = "Error fetching invite information.";
             if (isEphemeral) {
-                return { type: 4, data: { content: "Error fetching server information.", flags: 64 } };
+                return { type: 4, data: { content: errorMsg, flags: 64 } };
             }
-            showToast("Failed to fetch server information", getAssetIDByName("Small"));
+            showToast(errorMsg, getAssetIDByName("Small"));
             return null;
         }
     },
