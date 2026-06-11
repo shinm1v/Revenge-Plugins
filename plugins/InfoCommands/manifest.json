@@ -1,7 +1,7 @@
 {
     "name": "InfoCommands",
-    "description": "Get user, server, and invite information with clean embeds",
+    "description": "commands to Get user, server, and invite information",
     "authors": [{ "name": "fshin", "id": "1381008677301129257" }],
-    "main": "./index.ts",
+    "main": "./index.js",
     "vendetta": { "icon": "ic_info_24px" }
 }
