@@ -1,3 +1,4 @@
+import { findByProps } from "@vendetta/metro";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { getEmbedColor, formatTimestamp, formatAvatarLinks, maskUrl, fetchUser, createSafeEmbed } from "../utils/embeds";
