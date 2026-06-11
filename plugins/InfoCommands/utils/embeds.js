@@ -1,10 +1,29 @@
 import { findByProps } from "@vendetta/metro";
 
 const API = findByProps("get", "post");
+const DISCORD_EPOCH = 1420070400000;
+
+// Convert Snowflake ID to timestamp
+export function snowflakeToTimestamp(snowflake) {
+    try {
+        const id = BigInt(snowflake);
+        const timestamp = Number((id >> 22n) + BigInt(DISCORD_EPOCH));
+        return timestamp;
+    } catch (e) {
+        console.error("[Snowflake] Failed to convert:", e);
+        return null;
+    }
+}
 
 export function formatTimestamp(timestamp) {
     if (!timestamp || isNaN(timestamp)) return "Unknown";
     return `<t:${Math.floor(timestamp / 1000)}:R>`;
+}
+
+export function formatTimestampFromSnowflake(snowflake) {
+    const timestamp = snowflakeToTimestamp(snowflake);
+    if (!timestamp) return "Unknown";
+    return formatTimestamp(timestamp);
 }
 
 export function maskUrl(text, url) {
