@@ -82,18 +82,10 @@ async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
     const SelectedGuildStore = findByProps("getGuildId", "getChannelId");
     
     const currentGuildId = SelectedGuildStore?.getGuildId?.();
-    if (!currentGuildId) {
-        logger.warn("[ValidUser] No guild context for gateway request");
-        return false;
-    }
+    if (!currentGuildId) return false;
 
     const ws = GatewayConnection?.getGateway?.();
-    if (!ws) {
-        logger.warn("[ValidUser] Gateway connection not available");
-        return false;
-    }
-
-    logger.log(`[ValidUser] Sending bulk gateway request for ${userIds.length} users.`);
+    if (!ws) return false;
 
     ws.send(8, {
         guild_id: currentGuildId,
@@ -130,10 +122,7 @@ async function fixUnknownMentions(message: any) {
     const channelId = message.channel_id;
     const messageId = message.id;
 
-    if (ids.length === 0) {
-        logger.log("[ValidUser] No mention IDs found in message or embeds");
-        return;
-    }
+    if (ids.length === 0) return;
 
     const uncachedIds: string[] = [];
     for (const userId of ids) {
@@ -143,48 +132,37 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (uncachedIds.length === 0) {
-        logger.log("[ValidUser] All users already cached, forcing clean string update");
         if (channelId && messageId) {
             await forceUIRefresh(channelId, messageId, message.content);
         }
         return;
     }
 
-    logger.log(`[ValidUser] Processing ${uncachedIds.length} uncached user(s) out of ${ids.length} total`);
-
     const BULK_THRESHOLD = 5;
     let success = false;
 
     const SelectedGuildStore = findByProps("getGuildId");
     if (uncachedIds.length > BULK_THRESHOLD && SelectedGuildStore?.getGuildId?.()) {
-        logger.log(`[ValidUser] Attempting gateway bulk fetch...`);
         success = await fetchUsersViaGateway(uncachedIds);
     }
 
     if (!success) {
-        logger.log(`[ValidUser] Using individual API fallback loop for ${uncachedIds.length} users`);
-        
         const API = findByProps("get", "post");
         const Dispatcher = findByProps("dispatch", "subscribe");
         const TokenStore = findByProps("getToken");
         const token = TokenStore?.getToken();
 
-        if (!token) {
-            logger.error("[ValidUser] Aborted: Token unavailable.");
-            return;
-        }
+        if (!token) return;
 
         const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
 
         for (let i = 0; i < uncachedIds.length; i++) {
             const userId = uncachedIds[i];
             try {
-                const username = await fetchUsersViaAPI(userId, token, API, Dispatcher);
-                logger.log(`[ValidUser] Successfully cached: ${username} [${i+1}/${uncachedIds.length}]`);
+                await fetchUsersViaAPI(userId, token, API, Dispatcher);
             } catch (err) {
-                logger.error(`[ValidUser] HTTP Fetch Failed for ID ${userId}:`, err);
+                logger.error(`[ValidUser] Fetch Failed for ${userId}:`, err);
             }
-            
             if (i < uncachedIds.length - 1) {
                 await sleep(safetyDelay);
             }
@@ -193,7 +171,6 @@ async function fixUnknownMentions(message: any) {
 
     if (channelId && messageId) {
         await forceUIRefresh(channelId, messageId, message.content);
-        logger.log(`[ValidUser] Component string updated safely without channel flashing`);
     }
 }
 
@@ -215,11 +192,10 @@ export default {
 
                     const groups: any[] = findInReactTree(
                         component,
-                        (c: any) => Array.isArray(c) && c?.type?.name === "ActionSheetRowGroup"
+                        (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
                     );
 
                     if (!groups?.length) {
-                        logger.warn("[ValidUser] Could not find ActionSheetRowGroups");
                         return;
                     }
 
@@ -250,7 +226,6 @@ export default {
                     }
 
                     if (!inserted) {
-                        logger.warn("[ValidUser] Could not insert button, adding as new group");
                         groups.unshift(
                             React.createElement(ActionSheetRow.Group, null, fixButton)
                         );
@@ -258,13 +233,10 @@ export default {
                 });
             });
         });
-
-        logger.log("[ValidUser] Safe reload initialized.");
     },
 
     onUnload() {
         unpatchOpenLazy?.();
         unpatchOpenLazy = null;
-        logger.log("[ValidUser] Unloaded safely.");
     },
 };
