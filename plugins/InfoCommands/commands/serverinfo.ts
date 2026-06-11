@@ -1,6 +1,6 @@
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import { getEmbedColor, formatTimestamp, maskUrl, getGuildIconUrl, sendEmbed, fetchGuild } from "../utils/embeds";
+import { getEmbedColor, formatTimestamp, maskUrl, getGuildIconUrl, fetchGuild, createSafeEmbed } from "../utils/embeds";
 
 const featureMap: Record<string, string> = {
     "ANIMATED_ICON": "Animated Icon",
@@ -64,7 +64,7 @@ export const serverInfoCommand = {
             
             const guild = await fetchGuild(guildId);
             
-            if (!guild) {
+            if (!guild || !guild.id) {
                 const errorMsg = `Server not found: ${guildId}`;
                 if (isEphemeral) {
                     return { type: 4, data: { content: errorMsg, flags: 64 } };
@@ -83,7 +83,7 @@ export const serverInfoCommand = {
             const fields = [
                 {
                     name: "Details",
-                    value: `Created: ${formatTimestamp(Date.parse(guild.created_at))}\nBoost: Level ${guild.premium_tier || 0} (${guild.premium_subscription_count || 0} boosts)\nVerification: ${verificationMap[guild.verification_level || 0]}\nNSFW: ${nsfwLevelMap[guild.nsfw_level || 0]}`,
+                    value: `Created: ${guild.created_at ? formatTimestamp(Date.parse(guild.created_at)) : "Unknown"}\nBoost: Level ${guild.premium_tier ?? 0} (${guild.premium_subscription_count ?? 0} boosts)\nVerification: ${verificationMap[guild.verification_level ?? 0]}\nNSFW: ${nsfwLevelMap[guild.nsfw_level ?? 0]}`,
                     inline: false
                 },
                 {
@@ -103,16 +103,28 @@ export const serverInfoCommand = {
             
             fields.push({ name: "ID", value: guild.id, inline: false });
             
-            const embed = {
+            const embed = createSafeEmbed({
                 color: getEmbedColor(),
-                type: "rich",
-                title: guild.name,
-                description: guild.description || "No description.",
+                title: guild.name ?? "Unknown Server",
+                description: guild.description ?? "No description.",
                 thumbnail: iconUrl ? { url: iconUrl } : undefined,
                 fields: fields
-            };
+            });
             
-            return sendEmbed(ctx.channel.id, embed, isEphemeral);
+            const { sendBotMessage } = findByProps("sendBotMessage", "sendMessage", "receiveMessage");
+            
+            if (isEphemeral) {
+                return {
+                    type: 4,
+                    data: {
+                        embeds: [embed],
+                        flags: 64
+                    }
+                };
+            } else {
+                sendBotMessage(ctx.channel.id, { embeds: [embed] });
+                return null;
+            }
             
         } catch (error) {
             console.error("[ServerInfo] Error:", error);
