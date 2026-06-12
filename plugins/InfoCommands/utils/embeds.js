@@ -38,7 +38,7 @@ export function maskUrl(text, url) {
 export function getAvatarUrls(userId, avatarHash) {
     const baseUrl = `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}`;
     const isGif = avatarHash?.startsWith("a_");
-    
+
     return {
         png: `${baseUrl}.png?size=1024`,
         jpg: `${baseUrl}.jpg?size=1024`,
@@ -102,7 +102,7 @@ export function decodeBadges(flags) {
         { bit: 1 << 16, name: "Active Developer" },
         { bit: 1 << 18, name: "BOT_HTTP_INTERACTIONS" }
     ];
-    
+
     const userBadges = [];
     for (const badge of badgeMap) {
         if (flags & badge.bit) {
@@ -140,4 +140,46 @@ export async function fetchInvite(inviteCode) {
         console.error("[API] Failed to fetch invite:", e);
         return null;
     }
+}
+
+export function extractMentionsFromEmbed(embed) {
+    const mentions = {
+        users: [],
+        channels: [],
+        roles: []
+    };
+    
+    if (!embed) return mentions;
+    
+    const textToCheck = [];
+    
+    if (embed.author?.name) textToCheck.push(embed.author.name);
+    if (embed.title) textToCheck.push(embed.title);
+    if (embed.description) textToCheck.push(embed.description);
+    if (embed.footer?.text) textToCheck.push(embed.footer.text);
+    
+    if (embed.fields) {
+        for (const field of embed.fields) {
+            if (field.name) textToCheck.push(field.name);
+            if (field.value) textToCheck.push(field.value);
+        }
+    }
+    
+    for (const text of textToCheck) {
+        if (typeof text === "string") {
+            const userMatches = text.match(/<@!?(\d+)>/g);
+            const channelMatches = text.match(/<#(\d+)>/g);
+            const roleMatches = text.match(/<@&(\d+)>/g);
+            
+            if (userMatches) mentions.users.push(...userMatches);
+            if (channelMatches) mentions.channels.push(...channelMatches);
+            if (roleMatches) mentions.roles.push(...roleMatches);
+        }
+    }
+    
+    mentions.users = [...new Set(mentions.users)];
+    mentions.channels = [...new Set(mentions.channels)];
+    mentions.roles = [...new Set(mentions.roles)];
+    
+    return mentions;
 }
