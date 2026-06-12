@@ -1,228 +1,168 @@
 import { findByProps } from "@vendetta/metro";
 import { before, after } from "@vendetta/patcher";
-import { logger } from "@vendetta";
 import { React } from "@vendetta/metro/common";
 import { findInReactTree } from "@vendetta/utils";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 
 const ActionSheet = findByProps("openLazy", "hideActionSheet");
 const { ActionSheetRow } = findByProps("ActionSheetRow");
+const { sendMessage } = findByProps("sendMessage", "receiveMessage");
+const { createBotMessage } = findByProps("createBotMessage");
 
 const MentionIcon = getAssetIDByName("ic_mention_24px") ??
     getAssetIDByName("MentionIcon") ??
     getAssetIDByName("mention");
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-function extractIdsFromText(text: string): string[] {
-    if (!text) return [];
-    return [...text.matchAll(/<@!?(\d+)>/g)].map(x => x[1]);
+// Import the extract function from InfoCommands
+// Since it's a separate folder, you need to use relative path
+let extractMentionsFromEmbed;
+try {
+    const { extractMentionsFromEmbed: extractFn } = require("../InfoCommands/utils/embeds.js");
+    extractMentionsFromEmbed = extractFn;
+} catch (e) {
+    // Fallback if can't import
+    extractMentionsFromEmbed = (embed) => {
+        const mentions = { users: [], channels: [], roles: [] };
+        if (!embed) return mentions;
+        
+        const textToCheck = [];
+        if (embed.author?.name) textToCheck.push(embed.author.name);
+        if (embed.title) textToCheck.push(embed.title);
+        if (embed.description) textToCheck.push(embed.description);
+        if (embed.footer?.text) textToCheck.push(embed.footer.text);
+        if (embed.fields) {
+            for (const field of embed.fields) {
+                if (field.name) textToCheck.push(field.name);
+                if (field.value) textToCheck.push(field.value);
+            }
+        }
+        
+        for (const text of textToCheck) {
+            if (typeof text === "string") {
+                const userMatches = text.match(/<@!?(\d+)>/g);
+                const channelMatches = text.match(/<#(\d+)>/g);
+                const roleMatches = text.match(/<@&(\d+)>/g);
+                if (userMatches) mentions.users.push(...userMatches);
+                if (channelMatches) mentions.channels.push(...channelMatches);
+                if (roleMatches) mentions.roles.push(...roleMatches);
+            }
+        }
+        
+        mentions.users = [...new Set(mentions.users)];
+        mentions.channels = [...new Set(mentions.channels)];
+        mentions.roles = [...new Set(mentions.roles)];
+        return mentions;
+    };
 }
 
-function extractAllMentionIds(message: any): string[] {
-    const ids: string[] = [];
-
+function extractMentionsFromMessage(message) {
+    const mentions = { users: [], channels: [], roles: [] };
+    
     if (message.content) {
-        ids.push(...extractIdsFromText(message.content));
+        const userMatches = message.content.match(/<@!?(\d+)>/g);
+        const channelMatches = message.content.match(/<#(\d+)>/g);
+        const roleMatches = message.content.match(/<@&(\d+)>/g);
+        if (userMatches) mentions.users.push(...userMatches);
+        if (channelMatches) mentions.channels.push(...channelMatches);
+        if (roleMatches) mentions.roles.push(...roleMatches);
     }
-
-    if (message.embeds && Array.isArray(message.embeds)) {
+    
+    if (message.embeds) {
         for (const embed of message.embeds) {
-            for (const key of Object.keys(embed)) {
-                if (typeof embed[key] === "string") {
-                    ids.push(...extractIdsFromText(embed[key]));
-                }
-            }
-            if (embed.fields && Array.isArray(embed.fields)) {
-                for (const field of embed.fields) {
-                    if (field.name) ids.push(...extractIdsFromText(field.name));
-                    if (field.value) ids.push(...extractIdsFromText(field.value));
-                }
-            }
+            const embedMentions = extractMentionsFromEmbed(embed);
+            mentions.users.push(...embedMentions.users);
+            mentions.channels.push(...embedMentions.channels);
+            mentions.roles.push(...embedMentions.roles);
         }
     }
-
-    return [...new Set(ids)];
+    
+    mentions.users = [...new Set(mentions.users)];
+    mentions.channels = [...new Set(mentions.channels)];
+    mentions.roles = [...new Set(mentions.roles)];
+    
+    return mentions;
 }
 
-function isUserCached(userId: string): boolean {
-    const UserStore = findByProps("getUser", "getCurrentUser");
-    const user = UserStore?.getUser?.(userId);
-    return !!user;
+function sendMentionMessage(channelId, mentions) {
+    const messageParts = [];
+    
+    if (mentions.users.length > 0) {
+        messageParts.push("**Users:** " + mentions.users.join(" "));
+    }
+    if (mentions.channels.length > 0) {
+        messageParts.push("**Channels:** " + mentions.channels.join(" "));
+    }
+    if (mentions.roles.length > 0) {
+        messageParts.push("**Roles:** " + mentions.roles.join(" "));
+    }
+    
+    if (messageParts.length === 0) return;
+    
+    const content = messageParts.join("\n");
+    const msg = createBotMessage(channelId, { content: content });
+    sendMessage(channelId, msg);
 }
 
-async function forceUIRefresh(channelId: string, messageId: string, content: string) {
-    const Dispatcher = findByProps("dispatch", "subscribe");
-    const freshContent = content + " ";
-
-    Dispatcher.dispatch({
-        type: "MESSAGE_UPDATE",
-        message: {
-            id: messageId,
-            channel_id: channelId,
-            content: freshContent 
-        }
-    });
-
-    await sleep(50);
-
-    Dispatcher.dispatch({
-        type: "MESSAGE_UPDATE",
-        message: {
-            id: messageId,
-            channel_id: channelId,
-            content: content 
-        }
-    });
-}
-
-async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
-    const GatewayConnection = findByProps("getGateway", "send");
-    const SelectedGuildStore = findByProps("getGuildId", "getChannelId");
-
-    const currentGuildId = SelectedGuildStore?.getGuildId?.();
-    if (!currentGuildId) return false;
-
-    const ws = GatewayConnection?.getGateway?.();
-    if (!ws) return false;
-
-    ws.send(8, {
-        guild_id: currentGuildId,
-        user_ids: userIds,
-        presences: false
-    });
-
-    await sleep(400); 
-    return true;
-}
-
-async function fetchUsersViaAPI(userId: string, API: any, Dispatcher: any) {
-    const res = await API.get({ url: `/users/${userId}` });
-
-    if (res.body) {
-        Dispatcher.dispatch({
-            type: "USER_UPDATE",
-            user: res.body
-        });
-        return res.body.username;
-    }
-    throw new Error("Empty API response body");
-}
-
-async function fixUnknownMentions(message: any) {
-    const ids = extractAllMentionIds(message);
-    const channelId = message.channel_id;
-    const messageId = message.id;
-
-    if (ids.length === 0) return;
-
-    const uncachedIds: string[] = [];
-    for (const userId of ids) {
-        if (!isUserCached(userId)) {
-            uncachedIds.push(userId);
-        }
-    }
-
-    if (uncachedIds.length === 0) {
-        if (channelId && messageId) {
-            await forceUIRefresh(channelId, messageId, message.content);
-        }
-        return;
-    }
-
-    const BULK_THRESHOLD = 5;
-    let success = false;
-
-    const SelectedGuildStore = findByProps("getGuildId");
-    if (uncachedIds.length > BULK_THRESHOLD && SelectedGuildStore?.getGuildId?.()) {
-        success = await fetchUsersViaGateway(uncachedIds);
-    }
-
-    if (!success) {
-        const API = findByProps("get", "post");
-        const Dispatcher = findByProps("dispatch", "subscribe");
-
-        const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
-
-        for (let i = 0; i < uncachedIds.length; i++) {
-            const userId = uncachedIds[i];
-            try {
-                await fetchUsersViaAPI(userId, API, Dispatcher);
-            } catch (err) {
-                logger.error(`[ValidUser] Fetch Failed for ${userId}:`, err);
-            }
-            if (i < uncachedIds.length - 1) {
-                await sleep(safetyDelay);
-            }
-        }
-    }
-
-    if (channelId && messageId) {
-        await forceUIRefresh(channelId, messageId, message.content);
-    }
-}
-
-let unpatchOpenLazy: (() => void) | null = null;
+let unpatchOpenLazy = null;
 
 export default {
     onLoad() {
         unpatchOpenLazy = before("openLazy", ActionSheet, ([comp, args, msg]) => {
             if (args !== "MessageLongPressActionSheet" || !msg?.message) return;
-
+            
             const message = msg.message;
-            const ids = extractAllMentionIds(message);
-
-            if (ids.length === 0) return;
-
-            comp.then((instance: any) => {
-                const unpatch = after("default", instance, (_: any, component: any) => {
+            const mentions = extractMentionsFromMessage(message);
+            const totalMentions = mentions.users.length + mentions.channels.length + mentions.roles.length;
+            
+            if (totalMentions === 0) return;
+            
+            comp.then((instance) => {
+                const unpatch = after("default", instance, (_, component) => {
                     React.useEffect(() => () => { unpatch(); }, []);
-
-                    const groups: any[] = findInReactTree(
+                    
+                    const groups = findInReactTree(
                         component,
-                        (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
+                        (c) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
                     );
-
-                    if (!groups?.length) {
-                        return;
-                    }
-
-                    const fixButton = React.createElement(ActionSheetRow, {
-                        label: ids.length === 1 ? "Fix Unknown Mention" : `Fix ${ids.length} Unknown Mentions`,
+                    
+                    if (!groups?.length) return;
+                    
+                    const showButton = React.createElement(ActionSheetRow, {
+                        label: totalMentions === 1 ? "Show Mention" : `Show ${totalMentions} Mentions`,
                         icon: React.createElement(ActionSheetRow.Icon, {
                             source: MentionIcon,
                         }),
                         onPress: () => {
                             ActionSheet.hideActionSheet();
-                            fixUnknownMentions(message);
+                            sendMentionMessage(message.channel_id, mentions);
                         },
                     });
-
+                    
                     let inserted = false;
                     for (let gi = 0; gi < groups.length; gi++) {
-                        const groupChildren: any[] = findInReactTree(
+                        const groupChildren = findInReactTree(
                             groups[gi],
-                            (c: any) => Array.isArray(c) && c.some((child: any) =>
+                            (c) => Array.isArray(c) && c.some((child) =>
                                 child?.type?.name === "ActionSheetRow"
                             )
                         );
                         if (!groupChildren) continue;
-
-                        groupChildren.unshift(fixButton);
+                        
+                        groupChildren.unshift(showButton);
                         inserted = true;
                         break;
                     }
-
+                    
                     if (!inserted) {
                         groups.unshift(
-                            React.createElement(ActionSheetRow.Group, null, fixButton)
+                            React.createElement(ActionSheetRow.Group, null, showButton)
                         );
                     }
                 });
             });
         });
     },
-
+    
     onUnload() {
         unpatchOpenLazy?.();
         unpatchOpenLazy = null;
