@@ -28,10 +28,11 @@ function extractAllMentionIds(message: any): string[] {
 
     if (message.embeds && Array.isArray(message.embeds)) {
         for (const embed of message.embeds) {
-            for (const key of Object.keys(embed)) {
-                if (typeof embed[key] === "string") {
-                    ids.push(...extractIdsFromText(embed[key]));
-                }
+            if (embed.rawTitle) {
+                ids.push(...extractIdsFromText(embed.rawTitle));
+            }
+            if (embed.rawDescription) {
+                ids.push(...extractIdsFromText(embed.rawDescription));
             }
             if (embed.fields && Array.isArray(embed.fields)) {
                 for (const field of embed.fields) {
@@ -96,8 +97,15 @@ async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
     return true;
 }
 
-async function fetchUsersViaAPI(userId: string, API: any, Dispatcher: any) {
-    const res = await API.get({ url: `/users/${userId}` });
+async function fetchUsersViaAPI(userId: string, token: string, API: any, Dispatcher: any) {
+    const cleanToken = typeof token === "string" ? token : (token as any)?.token || "";
+
+    const res = await API.get({
+        url: `/users/${userId}`,
+        headers: {
+            Authorization: cleanToken.trim()
+        }
+    });
 
     if (res.body) {
         Dispatcher.dispatch({
@@ -141,13 +149,17 @@ async function fixUnknownMentions(message: any) {
     if (!success) {
         const API = findByProps("get", "post");
         const Dispatcher = findByProps("dispatch", "subscribe");
+        const TokenStore = findByProps("getToken");
+        const token = TokenStore?.getToken();
+
+        if (!token) return;
 
         const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
 
         for (let i = 0; i < uncachedIds.length; i++) {
             const userId = uncachedIds[i];
             try {
-                await fetchUsersViaAPI(userId, API, Dispatcher);
+                await fetchUsersViaAPI(userId, token, API, Dispatcher);
             } catch (err) {
                 logger.error(`[ValidUser] Fetch Failed for ${userId}:`, err);
             }
