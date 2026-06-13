@@ -1,0 +1,14 @@
+{
+    "name": "local-edit",
+    "description": "edit people's messages locally.",
+    "authors": [
+        {
+            "name": "fshin",
+            "id": "1381008677301129257"
+        }
+    ],
+    "main": "src/index.ts",
+    "vendetta": {
+        "icon": "PencilIcon"
+    }
+}
