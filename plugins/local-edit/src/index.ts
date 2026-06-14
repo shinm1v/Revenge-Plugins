@@ -1,181 +1,59 @@
 import { findByProps } from "@vendetta/metro";
 import { before, after } from "@vendetta/patcher";
-import { logger } from "@vendetta";
 import { React } from "@vendetta/metro/common";
 import { findInReactTree } from "@vendetta/utils";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 
 const ActionSheet = findByProps("openLazy", "hideActionSheet");
 const { ActionSheetRow } = findByProps("ActionSheetRow");
+const AlertModule = findByProps("alert", "prompt"); 
 
-const MentionIcon = getAssetIDByName("ic_mention_24px") ??
-    getAssetIDByName("MentionIcon") ??
-    getAssetIDByName("mention");
+// Direct asset resolution for the specific icon component name
+const EditIcon = getAssetIDByName("PencilSparkleIcon");
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-function extractIdsFromText(text: string): string[] {
-    if (!text) return [];
-    return [...text.matchAll(/<@!?(\d+)>/g)].map(x => x[1]);
-}
-
-function extractAllMentionIds(message: any): string[] {
-    const ids: string[] = [];
-
-    if (message.content) {
-        ids.push(...extractIdsFromText(message.content));
-    }
-
-    if (message.embeds && Array.isArray(message.embeds)) {
-        for (const embed of message.embeds) {
-            if (embed.rawTitle) {
-                ids.push(...extractIdsFromText(embed.rawTitle));
-            }
-            if (embed.rawDescription) {
-                ids.push(...extractIdsFromText(embed.rawDescription));
-            }
-            if (embed.fields && Array.isArray(embed.fields)) {
-                for (const field of embed.fields) {
-                    if (field.name) ids.push(...extractIdsFromText(field.name));
-                    if (field.value) ids.push(...extractIdsFromText(field.value));
-                }
-            }
-        }
-    }
-
-    return [...new Set(ids)];
-}
-
-function isUserCached(userId: string): boolean {
-    const UserStore = findByProps("getUser", "getCurrentUser");
-    const user = UserStore?.getUser?.(userId);
-    return !!user;
-}
-
-async function forceUIRefresh(channelId: string, messageId: string, content: string, embeds: any[] = []) {
+function dispatchLocalEdit(message: any, newContent: string) {
     const Dispatcher = findByProps("dispatch", "subscribe");
-    const freshContent = content ? content + " " : " ";
+    if (!message || !message.id || !message.channel_id) return;
 
-    // Dispatch slight variance update while preserving original embeds array
-    Dispatcher.dispatch({
-        type: "MESSAGE_UPDATE",
-        message: {
-            id: messageId,
-            channel_id: channelId,
-            content: freshContent,
-            embeds: embeds
-        }
-    });
-
-    await sleep(50);
-
-    // Dispatch original layout state to settle the visual cache
-    Dispatcher.dispatch({
-        type: "MESSAGE_UPDATE",
-        message: {
-            id: messageId,
-            channel_id: channelId,
-            content: content,
-            embeds: embeds
-        }
-    });
-}
-
-async function fetchUsersViaGateway(userIds: string[]): Promise<boolean> {
-    const GatewayConnection = findByProps("getGateway", "send");
-    const SelectedGuildStore = findByProps("getGuildId", "getChannelId");
-
-    const currentGuildId = SelectedGuildStore?.getGuildId?.();
-    if (!currentGuildId) return false;
-
-    const ws = GatewayConnection?.getGateway?.();
-    if (!ws) return false;
-
-    ws.send(8, {
-        guild_id: currentGuildId,
-        user_ids: userIds,
-        presences: false
-    });
-
-    await sleep(400); 
-    return true;
-}
-
-async function fetchUsersViaAPI(userId: string, token: string, API: any, Dispatcher: any) {
-    const cleanToken = typeof token === "string" ? token : (token as any)?.token || "";
-
-    const res = await API.get({
-        url: `/users/${userId}`,
-        headers: {
-            Authorization: cleanToken.trim()
-        }
-    });
-
-    if (res.body) {
-        Dispatcher.dispatch({
-            type: "USER_UPDATE",
-            user: res.body
-        });
-        return res.body.username;
-    }
-    throw new Error("Empty API response body");
-}
-
-async function fixUnknownMentions(message: any) {
-    const ids = extractAllMentionIds(message);
-    const channelId = message.channel_id;
-    const messageId = message.id;
-
-    if (ids.length === 0) return;
-
-    const uncachedIds: string[] = [];
-    for (const userId of ids) {
-        if (!isUserCached(userId)) {
-            uncachedIds.push(userId);
-        }
+    const modifiedMessage = JSON.parse(JSON.stringify(message));
+    modifiedMessage.content = newContent;
+    
+    if (modifiedMessage.content.endsWith("\u200b")) {
+        modifiedMessage.content = modifiedMessage.content.replace(/\u200b/g, "");
+    } else {
+        modifiedMessage.content += "\u200b";
     }
 
-    if (uncachedIds.length === 0) {
-        if (channelId && messageId) {
-            await forceUIRefresh(channelId, messageId, message.content, message.embeds);
-        }
+    Dispatcher.dispatch({
+        type: "MESSAGE_UPDATE",
+        message: modifiedMessage
+    });
+}
+
+function openLocalEditModal(message: any) {
+    if (!AlertModule?.prompt) {
+        AlertModule.alert("Error", "Native text input prompt module not found.");
         return;
     }
 
-    const BULK_THRESHOLD = 5;
-    let success = false;
-
-    const SelectedGuildStore = findByProps("getGuildId");
-    if (uncachedIds.length > BULK_THRESHOLD && SelectedGuildStore?.getGuildId?.()) {
-        success = await fetchUsersViaGateway(uncachedIds);
-    }
-
-    if (!success) {
-        const API = findByProps("get", "post");
-        const Dispatcher = findByProps("dispatch", "subscribe");
-        const TokenStore = findByProps("getToken");
-        const token = TokenStore?.getToken();
-
-        if (!token) return;
-
-        const safetyDelay = uncachedIds.length > 10 ? 450 : 250;
-
-        for (let i = 0; i < uncachedIds.length; i++) {
-            const userId = uncachedIds[i];
-            try {
-                await fetchUsersViaAPI(userId, token, API, Dispatcher);
-            } catch (err) {
-                logger.error(`[ValidUser] Fetch Failed for ${userId}:`, err);
+    AlertModule.prompt(
+        "Local Edit",
+        "Modify this message text locally on your device screen:",
+        [
+            {
+                text: "Cancel",
+                style: "cancel"
+            },
+            {
+                text: "Save Changes",
+                onPress: (userInput: string) => {
+                    dispatchLocalEdit(message, userInput ?? "");
+                }
             }
-            if (i < uncachedIds.length - 1) {
-                await sleep(safetyDelay);
-            }
-        }
-    }
-
-    if (channelId && messageId) {
-        await forceUIRefresh(channelId, messageId, message.content, message.embeds);
-    }
+        ],
+        "plain-text",
+        message.content || ""
+    );
 }
 
 let unpatchOpenLazy: (() => void) | null = null;
@@ -186,9 +64,6 @@ export default {
             if (args !== "MessageLongPressActionSheet" || !msg?.message) return;
 
             const message = msg.message;
-            const ids = extractAllMentionIds(message);
-
-            if (ids.length === 0) return;
 
             comp.then((instance: any) => {
                 const unpatch = after("default", instance, (_: any, component: any) => {
@@ -199,18 +74,18 @@ export default {
                         (c: any) => Array.isArray(c) && c[0]?.type?.name === "ActionSheetRowGroup"
                     );
 
-                    if (!groups?.length) {
-                        return;
-                    }
+                    if (!groups?.length) return;
 
-                    const fixButton = React.createElement(ActionSheetRow, {
-                        label: ids.length === 1 ? "Fix Unknown Mention" : `Fix ${ids.length} Unknown Mentions`,
+                    const localEditButton = React.createElement(ActionSheetRow, {
+                        label: "Local Edit Message",
                         icon: React.createElement(ActionSheetRow.Icon, {
-                            source: MentionIcon,
+                            source: EditIcon,
                         }),
                         onPress: () => {
                             ActionSheet.hideActionSheet();
-                            fixUnknownMentions(message);
+                            setTimeout(() => {
+                                openLocalEditModal(message);
+                            }, 150);
                         },
                     });
 
@@ -224,14 +99,14 @@ export default {
                         );
                         if (!groupChildren) continue;
 
-                        groupChildren.unshift(fixButton);
+                        groupChildren.unshift(localEditButton);
                         inserted = true;
                         break;
                     }
 
                     if (!inserted) {
                         groups.unshift(
-                            React.createElement(ActionSheetRow.Group, null, fixButton)
+                            React.createElement(ActionSheetRow.Group, null, localEditButton)
                         );
                     }
                 });
