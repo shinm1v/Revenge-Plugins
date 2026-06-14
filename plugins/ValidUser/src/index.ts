@@ -52,27 +52,31 @@ function isUserCached(userId: string): boolean {
     return !!user;
 }
 
-async function forceUIRefresh(channelId: string, messageId: string, content: string) {
+async function forceUIRefresh(channelId: string, messageId: string, content: string, embeds: any[] = []) {
     const Dispatcher = findByProps("dispatch", "subscribe");
-    const freshContent = content + " ";
+    const freshContent = content ? content + " " : " ";
 
+    // Frame 1: Strip embeds entirely and append spacing to forcefully unmount the component
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
             id: messageId,
             channel_id: channelId,
-            content: freshContent 
+            content: freshContent,
+            embeds: [] 
         }
     });
 
-    await sleep(50);
+    await sleep(40);
 
+    // Frame 2: Re-inject original structure to force a pristine re-render from cache
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
             id: messageId,
             channel_id: channelId,
-            content: content 
+            content: content,
+            embeds: embeds
         }
     });
 }
@@ -133,7 +137,7 @@ async function fixUnknownMentions(message: any) {
 
     if (uncachedIds.length === 0) {
         if (channelId && messageId) {
-            await forceUIRefresh(channelId, messageId, message.content);
+            await forceUIRefresh(channelId, messageId, message.content, message.embeds);
         }
         return;
     }
@@ -170,7 +174,7 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (channelId && messageId) {
-        await forceUIRefresh(channelId, messageId, message.content);
+        await forceUIRefresh(channelId, messageId, message.content, message.embeds);
     }
 }
 
