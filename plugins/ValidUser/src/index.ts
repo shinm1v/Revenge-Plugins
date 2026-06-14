@@ -54,10 +54,12 @@ function isUserCached(userId: string): boolean {
 
 async function forceUIRefresh(channelId: string, messageId: string, content: string, embeds: any[] = []) {
     const Dispatcher = findByProps("dispatch", "subscribe");
-    const originalEmbeds = Array.isArray(embeds) ? embeds : [];
+    
+    // Deep copy the original embed object structures to block mutation bugs inside Discord data stores
+    const safeEmbeds = Array.isArray(embeds) 
+        ? embeds.map(embed => ({ ...embed })) 
+        : [];
 
-    // Append an invisible zero-width space to force a complete text re-render frame.
-    // This avoids unmounting the embed entirely and safely updates the cached mention names.
     const freshContent = content ? content + "\u200b" : "\u200b";
 
     Dispatcher.dispatch({
@@ -66,7 +68,7 @@ async function forceUIRefresh(channelId: string, messageId: string, content: str
             id: messageId,
             channel_id: channelId,
             content: freshContent,
-            embeds: originalEmbeds
+            embeds: safeEmbeds
         }
     });
 }
