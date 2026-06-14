@@ -54,29 +54,19 @@ function isUserCached(userId: string): boolean {
 
 async function forceUIRefresh(channelId: string, messageId: string, content: string, embeds: any[] = []) {
     const Dispatcher = findByProps("dispatch", "subscribe");
-    const freshContent = content ? content + " " : " ";
+    const originalEmbeds = Array.isArray(embeds) ? embeds : [];
 
-    // Frame 1: Strip embeds entirely and append spacing to forcefully unmount the component
+    // Append an invisible zero-width space to force a complete text re-render frame.
+    // This avoids unmounting the embed entirely and safely updates the cached mention names.
+    const freshContent = content ? content + "\u200b" : "\u200b";
+
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
         message: {
             id: messageId,
             channel_id: channelId,
             content: freshContent,
-            embeds: [] 
-        }
-    });
-
-    await sleep(40);
-
-    // Frame 2: Re-inject original structure to force a pristine re-render from cache
-    Dispatcher.dispatch({
-        type: "MESSAGE_UPDATE",
-        message: {
-            id: messageId,
-            channel_id: channelId,
-            content: content,
-            embeds: embeds
+            embeds: originalEmbeds
         }
     });
 }
