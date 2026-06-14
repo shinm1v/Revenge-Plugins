@@ -55,10 +55,15 @@ function isUserCached(userId: string): boolean {
 async function forceUIRefresh(channelId: string, messageId: string, content: string, embeds: any[] = []) {
     const Dispatcher = findByProps("dispatch", "subscribe");
     
-    // Deep copy the original embed object structures to block mutation bugs inside Discord data stores
-    const safeEmbeds = Array.isArray(embeds) 
-        ? embeds.map(embed => ({ ...embed })) 
-        : [];
+    // Strict deep serialization copy to preserve nested properties like rawTitle, fields, and descriptions
+    let safeEmbeds: any[] = [];
+    if (Array.isArray(embeds) && embeds.length > 0) {
+        try {
+            safeEmbeds = JSON.parse(JSON.stringify(embeds));
+        } catch (e) {
+            safeEmbeds = embeds.map(embed => ({ ...embed }));
+        }
+    }
 
     const freshContent = content ? content + "\u200b" : "\u200b";
 
