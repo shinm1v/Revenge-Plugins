@@ -9,15 +9,12 @@ import { semanticColors } from "@vendetta/ui";
 const ActionSheet = findByProps("openLazy", "hideActionSheet");
 const { ActionSheetRow } = findByProps("ActionSheetRow");
 
-// Target Discord's internal messaging row renderer modules
 const ChatItemWrapper = findByProps("DCDAutoModerationSystemMessageView", "default")?.default;
 const MessageRecord = findByName("MessageRecord");
 const RowManager = findByName("RowManager");
-const UserStore = findByProps("getUser", "getCurrentUser");
 
 const EditIcon = getAssetIDByName("PencilSparkleIcon");
 
-// Interactive preview modal style rules mapping native design tokens
 const styles = stylesheet.createThemedStyleSheet({
     previewContainer: {
         marginVertical: 8,
@@ -40,9 +37,6 @@ const styles = stylesheet.createThemedStyleSheet({
     }
 });
 
-/**
- * Commits the modified text payload straight into Discord's active local cache
- */
 function dispatchLocalEdit(message: any, newContent: string) {
     const Dispatcher = findByProps("dispatch", "subscribe");
     if (!message || !message.id || !message.channel_id) return;
@@ -50,7 +44,6 @@ function dispatchLocalEdit(message: any, newContent: string) {
     const modifiedMessage = JSON.parse(JSON.stringify(message));
     modifiedMessage.content = newContent;
     
-    // Toggle a zero-width trailing space character to force component layout tree processing
     if (modifiedMessage.content.endsWith("\u200b")) {
         modifiedMessage.content = modifiedMessage.content.replace(/\u200b/g, "");
     } else {
@@ -63,13 +56,9 @@ function dispatchLocalEdit(message: any, newContent: string) {
     });
 }
 
-/**
- * Renders the stateful interactive visual preview panel component
- */
 function LocalPreviewModal({ message }: { message: any }) {
     const [liveText, setLiveText] = React.useState(message.content || "");
 
-    // Reconstruct the message record profile on every key state change
     const simulatedMessage = new MessageRecord({
         ...message,
         content: liveText
@@ -77,7 +66,6 @@ function LocalPreviewModal({ message }: { message: any }) {
 
     return (
         <RN.View style={{ width: "100%" }}>
-            {/* Visual Chat Item Render Window */}
             {ChatItemWrapper && RowManager ? (
                 <RN.View style={styles.previewContainer}>
                     <RN.ScrollView nestedScrollEnabled={true}>
@@ -89,7 +77,6 @@ function LocalPreviewModal({ message }: { message: any }) {
                 </RN.View>
             ) : null}
 
-            {/* Interactive Live Input Editor Box */}
             <RN.TextInput
                 style={styles.inputField}
                 multiline={true}
@@ -98,7 +85,6 @@ function LocalPreviewModal({ message }: { message: any }) {
                 value={liveText}
                 onChangeText={(text) => {
                     setLiveText(text);
-                    // Dynamically pass the current state string to our tracking node
                     message.__pendingLocalContent = text;
                 }}
             />
@@ -106,23 +92,21 @@ function LocalPreviewModal({ message }: { message: any }) {
     );
 }
 
-/**
- * Triggers the custom confirmation alert containing our structural components
- */
 function openLocalEditPreview(message: any) {
-    // Instantiate a fallback tracker to secure input mutations safely across closures
     message.__pendingLocalContent = message.content || "";
 
-    showConfirmationAlert({
+    const alertOptions = {
         title: "Local Edit Preview",
         confirmText: "Save",
         cancelText: "Cancel",
         onConfirm: () => {
             dispatchLocalEdit(message, message.__pendingLocalContent);
         },
-        // @ts-expect-error -- Inject custom stateful interactive tree nodes into alert children array
         children: React.createElement(LocalPreviewModal, { message })
-    });
+    };
+
+    // @ts-expect-error - children is completely fine here but missing in base typings
+    showConfirmationAlert(alertOptions);
 }
 
 let unpatchOpenLazy: (() => void) | null = null;
@@ -152,7 +136,6 @@ export default {
                         }),
                         onPress: () => {
                             ActionSheet.hideActionSheet();
-                            // Delay invocation to prevent animation thread clipping
                             setTimeout(() => {
                                 openLocalEditPreview(message);
                             }, 150);
