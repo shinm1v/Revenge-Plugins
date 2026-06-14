@@ -52,20 +52,32 @@ function isUserCached(userId: string): boolean {
     return !!user;
 }
 
-async function forceUIRefresh(message: any) {
+async function forceUIRefresh(channelId: string, messageId: string, content: string, embeds: any[] = []) {
     const Dispatcher = findByProps("dispatch", "subscribe");
-    if (!message || !message.id || !message.channel_id) return;
+    const freshContent = content ? content + " " : " ";
 
-    // Deep clone the entire message state to avoid mutating live rendering references
-    const updatedMessage = JSON.parse(JSON.stringify(message));
-    
-    // Add an invisible marker character to force React to recognize a diff
-    updatedMessage.content = updatedMessage.content ? updatedMessage.content + "\u200b" : "\u200b";
-
-    // Dispatch the clean payload structure to refresh the current viewport smoothly
+    // Dispatch slight variance update while preserving original embeds array
     Dispatcher.dispatch({
         type: "MESSAGE_UPDATE",
-        message: updatedMessage
+        message: {
+            id: messageId,
+            channel_id: channelId,
+            content: freshContent,
+            embeds: embeds
+        }
+    });
+
+    await sleep(50);
+
+    // Dispatch original layout state to settle the visual cache
+    Dispatcher.dispatch({
+        type: "MESSAGE_UPDATE",
+        message: {
+            id: messageId,
+            channel_id: channelId,
+            content: content,
+            embeds: embeds
+        }
     });
 }
 
@@ -111,6 +123,8 @@ async function fetchUsersViaAPI(userId: string, token: string, API: any, Dispatc
 
 async function fixUnknownMentions(message: any) {
     const ids = extractAllMentionIds(message);
+    const channelId = message.channel_id;
+    const messageId = message.id;
 
     if (ids.length === 0) return;
 
@@ -122,7 +136,9 @@ async function fixUnknownMentions(message: any) {
     }
 
     if (uncachedIds.length === 0) {
-        await forceUIRefresh(message);
+        if (channelId && messageId) {
+            await forceUIRefresh(channelId, messageId, message.content, message.embeds);
+        }
         return;
     }
 
@@ -157,10 +173,9 @@ async function fixUnknownMentions(message: any) {
         }
     }
 
-    // Give the active client screen UI a small 100ms breathing room window 
-    // to complete closing animations before applying the update
-    await sleep(100);
-    await forceUIRefresh(message);
+    if (channelId && messageId) {
+        await forceUIRefresh(channelId, messageId, message.content, message.embeds);
+    }
 }
 
 let unpatchOpenLazy: (() => void) | null = null;
@@ -195,7 +210,6 @@ export default {
                         }),
                         onPress: () => {
                             ActionSheet.hideActionSheet();
-                            // Execute the operation
                             fixUnknownMentions(message);
                         },
                     });
